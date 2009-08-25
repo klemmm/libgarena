@@ -21,7 +21,7 @@ typedef struct {
 
 typedef struct {
   int servsock;
-  char myname[16];
+  char myname[17];
   uint32_t my_ID;
   llist_t rooms;
 } ghl_ctx_t;
@@ -34,6 +34,7 @@ typedef struct {
     
 typedef struct {
   int roomsock;
+  int room_ID;
   gcrp_member_t *me;
   ghl_ctx_t *ctx;
   llist_t members;
@@ -42,7 +43,7 @@ typedef struct {
 static ghl_handler_t ghl_handlers[GHL_EV_NUM]; 
 
 ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_port);
-ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port);
+ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id);
 int ghl_leave_room(ghl_rh_t *rh);
 int ghl_toggle_vpn(ghl_rh_t *rh, int vpn);
 int ghl_talk(ghl_rh_t *rh, char *text);

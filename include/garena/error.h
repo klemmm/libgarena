@@ -15,5 +15,7 @@ extern long garena_errno;
 #define GARENA_ERR_INUSE -7
 #define GARENA_ERR_NOTFOUND -8
 #define GARENA_ERR_MALFORMED -9
+#define GARENA_ERR_NORESOURCE -10
+
 
 #endif
