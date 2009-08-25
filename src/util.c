@@ -3,12 +3,12 @@
 #include <garena/util.h>
 
 
-typedef struct cell_s {
+struct cell_s {
   void *val;
   struct cell_s *next;
-} cell_t;
+};
 
-struct llist_s{
+struct llist_s {
   cell_t *head;
 };  
 
@@ -23,6 +23,18 @@ llist_t llist_alloc(void) {
     return NULL;
   tmp->head = NULL;
   return(tmp);   
+}
+
+void *llist_val(cell_t cell) {
+  return cell->val;
+}
+
+
+cell_t llist_iter(llist_t desc) {
+  return desc->head;
+}
+cell_t llist_next(cell_t cell) {
+  return cell->next;
 }
 
 void *llist_head(llist_t desc) {
