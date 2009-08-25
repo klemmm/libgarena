@@ -1,0 +1,17 @@
+AC_INIT(src/garena.c)
+AM_INIT_AUTOMAKE(libgarena, 0.1)
+
+AM_CONFIG_HEADER(include/garena/config.h)
+
+
+AC_PROG_CC
+AC_PROG_LIBTOOL
+AM_PROG_LD
+
+AC_TYPE_UINT8_T
+AC_TYPE_UINT16_T
+AC_TYPE_UINT32_T
+AC_C_BIGENDIAN
+
+AC_OUTPUT([Makefile src/Makefile include/Makefile include/garena/Makefile])
+
