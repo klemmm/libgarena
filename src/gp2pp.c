@@ -78,11 +78,12 @@ int gp2pp_input(gp2pp_handtab_t *htab,char *buf, int length, struct sockaddr_in 
   }
 
   if ((hdr->msgtype < 0) || (hdr->msgtype >= GP2PP_MSG_NUM) || (htab->gp2pp_handlers[hdr->msgtype].fun == NULL)) {
-    IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Unhandled message of type: %x\n", hdr->msgtype));
+    fprintf(deb, "[DEBUG/GP2PP] Unhandled message of type: %x\n", hdr->msgtype);
+    fflush(deb);
   } else {
     
     if (htab->gp2pp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gp2pp_hdr_t), length - sizeof(gp2pp_hdr_t), htab->gp2pp_handlers[hdr->msgtype].privdata, ghtonl(hdr->user_ID), remote) == -1) {
-      garena_perror("[WARN/GP2PP] Error while handling message");
+/*      garena_perror("[WARN/GP2PP] Error while handling message"); */
     }
   }
 }

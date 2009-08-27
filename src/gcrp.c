@@ -151,7 +151,8 @@ int gcrp_input(gcrp_handtab_t *htab, char *buf, int length, void *roomdata) {
     return -1;
   }
   if ((hdr->msgtype < 0) || (hdr->msgtype >= GCRP_MSG_NUM) || (htab->gcrp_handlers[hdr->msgtype].fun == NULL)) {
-    IFDEBUG(fprintf(stderr, "[DEBUG/GCRP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, hdr->msglen - 1));
+    fprintf(deb, "[DEBUG/GCRP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, hdr->msglen - 1);
+    fflush(deb);
   } else {
     
     if (htab->gcrp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gcrp_hdr_t), length - sizeof(gcrp_hdr_t), htab->gcrp_handlers[hdr->msgtype].privdata, roomdata) == -1) {

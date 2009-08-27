@@ -19,5 +19,8 @@
 #define GARENA_NETWORK "192.168.29.0"
 int garena_init(void);
 
+#define DEBUG_LOG "/tmp/garena.log"
+extern FILE *deb;
+
 
 #endif

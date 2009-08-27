@@ -57,6 +57,7 @@ typedef struct {
   llist_t members;
   int got_welcome, got_members;
   ghl_timer_t *timeout;
+  int joined;
   char welcome[GCRP_MAX_MSGSIZE];
 } ghl_rh_t;
 

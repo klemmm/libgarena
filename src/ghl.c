@@ -68,7 +68,8 @@ static int handle_peer_msg(int type, void *payload, int length, void *privdata, 
   ghl_udp_encap_t udp_encap_ev;
   ghl_member_t *member = ghl_global_find_member(ctx, user_id);
   if (member == NULL) {
-    printf("[GHL/ERR] Received message from unknown user_id %x\n", user_id);
+    fprintf(deb, "[GHL/ERR] Received GP2PP message from unknown user_id %x\n", user_id);
+    fflush(deb);
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
@@ -103,7 +104,7 @@ static int handle_room_join_timeout(void *privdata) {
   int err = 0;
   ghl_me_join_t join;
   ghl_rh_t *rh = privdata;
-  printf("Room %x join timeouted.\n", rh->room_ID);
+/*  printf("Room %x join timeouted.\n", rh->room_ID); */
   join.result = -1;
   join.rh = rh;
   err |= (ghl_signal_event(rh->ctx, GHL_EV_ME_JOIN, &join) == -1);
@@ -194,7 +195,9 @@ static int handle_room_join(int type, void *payload, int length, void *privdata,
     join.result = 0;
     join.rh = rh;
     ghl_free_timer(rh->timeout);
+    rh->timeout = 0;
     send_hello_to_members(rh);
+    rh->joined = 1;
     return ghl_signal_event(ctx, GHL_EV_ME_JOIN, &join);
   }
   
@@ -242,17 +245,25 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
       } else {
         member = ghl_member_from_id(rh, ghtonl(talk->user_id));
         if (member == NULL) {
-          fprintf(stderr, "[GHL/WARN] Received message from an user not on the room\n");
+          fprintf(deb, "[GHL/WARN] Received message from an user not on the room (%x)\n", ghtonl(togglevpn->user_id)); 
+          fflush(deb);
+          garena_errno = GARENA_ERR_PROTOCOL;
+          return -1;
         }
         talk_ev.rh = rh;
         talk_ev.member = member;
         talk_ev.text = buf;
         ghl_signal_event(ctx, GHL_EV_TALK, &talk_ev);
       }
-;
       break;
     case GCRP_MSG_STARTVPN:
         member = ghl_member_from_id(rh, ghtonl(togglevpn->user_id));
+        if (member == NULL) {
+          fprintf(deb, "[GHL/WARN] Received startvpn from an user not on the room (%x)\n", ghtonl(togglevpn->user_id)); 
+          fflush(deb);
+          garena_errno = GARENA_ERR_PROTOCOL;
+          return -1;
+        }
         togglevpn_ev.rh = rh;
         togglevpn_ev.member = member;
         togglevpn_ev.vpn = 1;
@@ -261,6 +272,13 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
       break;
     case GCRP_MSG_STOPVPN:
         member = ghl_member_from_id(rh, ghtonl(togglevpn->user_id));
+        if (member == NULL) {
+          fprintf(deb, "[GHL/WARN] Received stopvpn from an user not on the room (%x)\n", ghtonl(togglevpn->user_id)); 
+          fflush(deb);
+          garena_errno = GARENA_ERR_PROTOCOL;
+          return -1;
+        }
+        
         togglevpn_ev.rh = rh;
         togglevpn_ev.member = member;
         togglevpn_ev.vpn = 0;
@@ -270,14 +288,16 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
     case GCRP_MSG_PART:
       member = ghl_member_from_id(rh, ghtonl(part->user_id));
       if (member == NULL) {
-        fprintf(stderr, "[GHL/WARN] Received PART message from an user, but that user was not in the room.\n");
-      } else {
-        part_ev.member = member;
-        part_ev.rh = rh;
-        ghl_signal_event(ctx, GHL_EV_PART, &part_ev);
-        llist_del_item(rh->members, member);
-        free(member);
-      }
+        fprintf(deb, "[GHL/WARN] Received PART message from an user, but that user was not in the room (%x).\n", ghtonl(togglevpn->user_id)); 
+        fflush(deb);
+        garena_errno = GARENA_ERR_PROTOCOL;
+        return -1;
+      } 
+      part_ev.member = member;
+      part_ev.rh = rh;
+      ghl_signal_event(ctx, GHL_EV_PART, &part_ev);
+      llist_del_item(rh->members, member);
+      free(member);
       break;
     default:  
       garena_errno = GARENA_ERR_INVALID;
@@ -421,6 +441,7 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id)
   }
 
   rh->ctx = ctx;
+  rh->joined = 0;
   rh->room_ID = room_id;
   rh->me = NULL;
   
@@ -492,7 +513,8 @@ static int ghl_free_room(ghl_rh_t *rh) {
   
   llist_free(rh->members);
   llist_del_item(rh->ctx->rooms, rh);
-  ghl_free_timer(rh->timeout);
+  if (rh->timeout)
+    ghl_free_timer(rh->timeout);
   free(rh);
   return 0;    
 }
@@ -555,9 +577,10 @@ int ghl_next_timer(struct timeval *tv) {
   next = llist_head(timers);
   if (next) {
     tv->tv_sec = (next->when) - now;
+    fprintf(deb, "next timer in %u\n", tv->tv_sec);
+    fflush(deb);
     return 1;
   }
-  printf("there is no timers!\n");
   return 0;
 }
 
@@ -723,6 +746,8 @@ void* ghl_handler_privdata(ghl_ctx_t *ctx, int event) {
 
 
 void ghl_free_timer(ghl_timer_t *timer) {
+  if (timer == NULL)
+    return;
   llist_del_item(timers, timer);
   free(timer);
 }
