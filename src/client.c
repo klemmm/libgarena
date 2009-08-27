@@ -11,184 +11,93 @@
 #include <garena/garena.h>
 #include <garena/gcrp.h>
 #include <garena/gp2pp.h>
-
+#include <garena/ghl.h>
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 
-int handle_hello(int type, void *payload, int length, void *privdata, int user_ID, struct sockaddr_in *remote) {
-  gp2pp_udp_encap_t *udp_encap = payload;
-  switch(type) {
-    case GP2PP_MSG_HELLO_REQ:
-/*     printf("Received Hello from %s:%u (user_ID=%x)\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port), user_ID);  */
-     break;
-    case GP2PP_MSG_HELLO_REP:
-     break;
-    case GP2PP_MSG_UDP_ENCAP:
-/*     printf("Received tunnelled UDP packet, sport=%u dport=%u\n", htons(udp_encap->sport), htons(udp_encap->dport)); */
-     break;
+int handle_me_join(int event, void *event_param, void *privdata) {
+  ghl_me_join_t *join = event_param;
+  ghl_ctx_t *ctx = privdata;
+  cell_t iter;
+  ghl_member_t *member;
+  if (join->result == EXIT_SUCCESS) {
+    printf("Room %x joined.\n", join->rh->room_ID);
+    printf("%s\n", join->rh->welcome);
+    printf("Room members [not playing]: ");
+    for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
+      member = llist_val(iter);
+      if (!member->vpn)
+        printf("%s ", member->name);
+    }
+    printf("\n");
+    printf("Room members [playing]: ");
+    for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
+      member = llist_val(iter);
+      if (member->vpn)
+        printf("%s ", member->name);
+    }
+    printf("\n");
+    ghl_togglevpn(join->rh, 1);
+  } else {
+    printf("Room %x join failed.\n", join->rh->room_ID);
   }
-}
-
-int handle_traffic(int type, void *payload, int length, void *privdata) {
-  static char buf[GCRP_MAX_MSGSIZE];
-  gcrp_talk_t *talk = payload;
-  gcrp_togglevpn_t *toggle = payload;
-  gcrp_join_t *join = payload;
-  gcrp_leave_t *leave = payload;
-  
-  switch(type) {
-    case GCRP_MSG_TALK:
-    
-      if (gcrp_tochar(buf, talk->text, (talk->length >> 1) + 1) == -1) {
-        fprintf(stderr, "Failed to convert user message.\n");
-      } else {
-        printf("Room %x <%x> %s\n",ghtonl(talk->room_id), ghtonl(talk->user_id), buf); 
-      }
-      break;
-    case GCRP_MSG_STARTVPN:
-      printf("User %x started a game.\n", ghtonl(toggle->user_id));
-      
-      break;
-    case GCRP_MSG_STOPVPN:
-      printf("User %x stopped a game.\n", ghtonl(toggle->user_id));
-      break;
-      
-    case GCRP_MSG_JOIN:
-      printf("User %x joined the room.\n", ghtonl(join->user_id));
-      printf("New Member: Name=%s ID=%x Country=%s ExternalIP=%s", join->name, join->user_id, join->country, inet_ntoa(join->external_ip));
-      printf(" InternalIP=%s VirtualIP=192.168.29.%u\n", inet_ntoa(join->internal_ip), join->virtual_suffix);
-
-      break;
-    case GCRP_MSG_LEAVE:
-      printf("User %x left the room.\n", ghtonl(leave->user_id));
-      break;
-    default:
-      abort();
-      break;
-  }
-  
   return 0;
 }
 
-int handle_join(int type, void *payload, int length, void *privdata) {
-  static char buf[GCRP_MAX_MSGSIZE];
-  gcrp_welcome_t *welcome = payload;
-  gcrp_memberlist_t *memberlist = payload;
-  int i;
+int handle_talk(int event, void *event_param, void *privdata) {
+  ghl_talk_t *talk = event_param;
   
-  switch(type) {
-    case GCRP_MSG_WELCOME:
-        printf("Welcome on Chat Room %x\n", ghtonl(welcome->room_id));
-      if (gcrp_tochar(buf, welcome->text, GCRP_MAX_MSGSIZE-1) == -1) {
-        fprintf(stderr, "Failed to convert welcome message.\n");
-      } else {
-        printf("Chat Room Welcome Message: [%s]\n", buf);
-      }
-      break;
-    case GCRP_MSG_MEMBERS:
-      printf("Received member list on the Chat Room %x (%u members)\n", ghtonl(memberlist->room_id), ghtonl(memberlist->num_members));
-      for (i = 0; i < ghtonl(memberlist->num_members); i++) {
-        printf("Member %u: Name=%s ID=%x Country=%s ExternalIP=%s", i, memberlist->members[i].name, memberlist->members[i].user_id, memberlist->members[i].country, inet_ntoa(memberlist->members[i].external_ip));
-        printf(" InternalIP=%s VirtualIP=192.168.29.%u\n", inet_ntoa(memberlist->members[i].internal_ip), memberlist->members[i].virtual_suffix);
-        
-      }
-      break;
-    default:
-      abort();
-      break;
-  }
-  return 0;  
+  printf("%x <%s> %s\n", talk->rh->room_ID, talk->member->name, talk->text);
 }
 
+int handle_join(int event, void *event_param, void *privdata) {
+  ghl_join_t *join = event_param;
+  
+  printf("%x %s joined the room.\n", join->rh->room_ID, join->member->name);
+}
 
+int handle_part(int event, void *event_param, void *privdata) {
+  ghl_part_t *part = event_param;
+  
+  printf("%x %s left the room.\n", part->rh->room_ID, part->member->name);
+}
+
+int handle_udp_encap(int event, void *event_param, void *privdata) {
+  ghl_udp_encap_t *udp_encap = event_param;
+  printf("%s sent an UDP packet, sport=%u, dport=%u\n", udp_encap->member->name, udp_encap->sport, udp_encap->dport);
+}
+
+int handle_togglevpn(int event, void *event_param, void *privdata) {
+  ghl_togglevpn_t *togglevpn = event_param;
+  
+  printf("%x %s %s a game.\n", togglevpn->rh->room_ID, togglevpn->member->name, togglevpn->vpn ? "started" : "stopped");
+}
 
 int main(void) {
-  int s, s2;
-  struct sockaddr_in fsocket;
-  struct sockaddr_in udplocal, udpremote;
-  
-  static char buf[GCRP_MAX_MSGSIZE];
-  fd_set fds;
-  int r;
-  
-  printf("Exemple client using libgarena\n");
-  if (garena_init() == -1) {
-    garena_perror("garena_init");
-    exit(-1);
-  }
-  s = socket(PF_INET, SOCK_STREAM, 0);
-  if (s == -1) {
-    perror("gcrp socket");
-    exit(-1);
-  }
-  s2 = socket(PF_INET, SOCK_DGRAM, 0);
-  if (s2 == -1) {
-    perror("gp2pp socket");
-    exit(-1);
-  }
-  udplocal.sin_family = AF_INET;
-  udplocal.sin_addr.s_addr = INADDR_ANY;
-  udplocal.sin_port = htons(1513);
-  if (bind(s2, (struct sockaddr*) &udplocal, sizeof(udplocal)) == -1) {
-    perror("bind");
-    exit(-1);
-  }
-  
-  fsocket.sin_family = AF_INET;
-  fsocket.sin_addr.s_addr = inet_addr("74.86.170.188");
-  fsocket.sin_port = htons(8687);
-  if (connect(s, (struct sockaddr *) &fsocket, sizeof(fsocket)) == -1) {
-    perror("connect");
-    exit(-1);
-  }
-  
-  if (gcrp_send_join(s, 0x090009) == -1) {
-    garena_perror("gcrp_send_join");
-    exit(-1);
-  }
 
-  gcrp_register_handler(GCRP_MSG_MEMBERS, handle_join, NULL);
-  gcrp_register_handler(GCRP_MSG_WELCOME, handle_join, NULL);
-  gcrp_register_handler(GCRP_MSG_TALK, handle_traffic, NULL);
-  gcrp_register_handler(GCRP_MSG_STARTVPN, handle_traffic, NULL);
-  gcrp_register_handler(GCRP_MSG_STOPVPN, handle_traffic, NULL);
-  gcrp_register_handler(GCRP_MSG_JOIN, handle_traffic, NULL);
-  gcrp_register_handler(GCRP_MSG_LEAVE, handle_traffic, NULL);
-  
+  garena_init();
+/*
+rooms L4D
 
-  gp2pp_register_handler(GP2PP_MSG_HELLO_REQ, handle_hello, NULL);
-  gp2pp_register_handler(GP2PP_MSG_HELLO_REP, handle_hello, NULL);
-  gp2pp_register_handler(GP2PP_MSG_UDP_ENCAP, handle_hello, NULL);
-  sleep(1);
-  gcrp_send_togglevpn(s, 0x128829c, 1);
+ Europe Room 01|-1163241910|262234|1029
+  Europe Room 06|-986305584|459098|1029
+   Europe Room 05|-986305584|459099|1029
+    Europe Room 04|-986305584|459100|1029
+     Europe Room 03|-986305584|459101|1029
+      Europe Room 02|-1129687478|589833|1029
+      
+*/
+  ghl_ctx_t *ctx = ghl_new_ctx("paul13372", "tamere", 0x128829c, inet_addr("74.55.122.122"), 0);
+  ghl_register_handler(ctx, GHL_EV_ME_JOIN, handle_me_join, NULL);
+  ghl_register_handler(ctx, GHL_EV_TALK, handle_talk, NULL);
+  ghl_register_handler(ctx, GHL_EV_JOIN, handle_join, NULL);
+  ghl_register_handler(ctx, GHL_EV_PART, handle_part, NULL);
+  ghl_register_handler(ctx, GHL_EV_TOGGLEVPN, handle_togglevpn, NULL);
+  ghl_register_handler(ctx, GHL_EV_UDP_ENCAP, handle_udp_encap, NULL);
+  ghl_rh_t *rh = ghl_join_room(ctx, -1129687478, 8687, 589833);
   
-  sleep(1);  
-  while(1) {
-    FD_ZERO(&fds);
-    
-    FD_SET(s, &fds);
-    FD_SET(s2, &fds);
-    
-    r = select(MAX(s,s2)+1, &fds, NULL, NULL, NULL);
-    if (FD_ISSET(s, &fds)) {
-      r = gcrp_read(s, buf, sizeof(buf));
-      if (r == -1) {
-        garena_perror("gcrp_read");
-        exit(-1);
-      }
-      gcrp_input(buf, r);
-    }
-    if (FD_ISSET(s2, &fds)) {
-      r = gp2pp_read(s2, buf, sizeof(buf), &udpremote);
-      if (r == -1) {
-        garena_perror("gp2pp_read");
-        exit(-1);
-      }
-      gp2pp_input(buf, r, &udpremote);
-    }
-    
-  }
-  close(s);
-  
+  while(ghl_process(ctx, NULL) != -1);
+
+  ghl_free_ctx(ctx);  
 }

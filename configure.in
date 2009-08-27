@@ -12,6 +12,6 @@ AC_TYPE_UINT8_T
 AC_TYPE_UINT16_T
 AC_TYPE_UINT32_T
 AC_C_BIGENDIAN
-
+AC_CHECK_LIB(ncurses, initscr)
 AC_OUTPUT([Makefile src/Makefile include/Makefile include/garena/Makefile])
 

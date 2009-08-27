@@ -13,7 +13,7 @@ static char *errstr[] = {
   "Unknown/undocumented error",
   "Resource is already in use",
   "Object not found",
-  "Malformed packet",
+  "Protocol error",
   "Insufficient resource"
 }; 
    

@@ -15,13 +15,44 @@
 #include <garena/util.h>
 
 
+
+/*
+
+char GCRP_JOINCODE[] = {
+0x00, 0x00, 0x00, 0x00, 0x3d, 0x00, 0x00, 
+0x00, 0xdc, 0x83, 0x7f, 0x81, 0x78, 0x9c, 0xeb, 
+0xf9, 0x27, 0xc9, 0x98, 0x9d, 0x93, 0x9a, 0x9b, 
+0x6b, 0x68, 0x64, 0x6c, 0xc2, 0x00, 0x01, 0x6e, 
+0x41, 0x0c, 0x0c, 0x8c, 0xac, 0x8c, 0x0c, 0x31, 
+0x8d, 0xcb, 0x2c, 0x0e, 0xac, 0x60, 0xe4, 0x07, 
+0x89, 0xb1, 0x30, 0xb0, 0xbe, 0x64, 0xc0, 0x02, 
+0xb4, 0xb8, 0xb0, 0x08, 0xb2, 0x02, 0xf5, 0x03, 
+0x29, 0x00, 0xad, 0xe7, 0x09, 0x83, 0x00, 0x00, 
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+0x00, 0x00, 0x00, 0x00, 0x00, 0x65, 0x34, 0x66, 
+0x34, 0x35, 0x64, 0x65, 0x30, 0x30, 0x32, 0x35, 
+0x34, 0x62, 0x37, 0x62, 0x30, 0x37, 0x62, 0x64, 
+0x62, 0x36, 0x36, 0x30, 0x30, 0x34, 0x30, 0x63, 
+0x30, 0x64, 0x32, 0x62, 0x35, 0x00, 0x00 };
+
+*/
+
 int gcrp_init(void) {
-  int i;
-  for (i = 0; i < GCRP_MSG_NUM; i++) {
-    gcrp_handlers[i].fun = NULL;
-    gcrp_handlers[i].privdata = NULL;
-  }
   return 0;
+}
+
+gcrp_handtab_t *gcrp_alloc_handtab (void) {
+  int i;
+  gcrp_handtab_t *htab = malloc(sizeof(gcrp_handtab_t));
+  if (htab == NULL) {
+    garena_errno = GARENA_ERR_NORESOURCE;
+    return NULL;
+  }
+  for (i = 0; i < GCRP_MSG_NUM; i++) {
+    htab->gcrp_handlers[i].fun = NULL;
+    htab->gcrp_handlers[i].privdata = NULL;
+  }
+  return htab;
 }
 
 
@@ -87,7 +118,7 @@ int gcrp_read(int sock, char *buf, int length) {
   }
   toread = ghtonl(hdr->msglen) - 1; 
   if (toread + sizeof(gcrp_hdr_t) > GCRP_MAX_MSGSIZE) {
-    garena_errno = GARENA_ERR_MALFORMED;
+    garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
   /* read message body */
@@ -107,23 +138,23 @@ int gcrp_read(int sock, char *buf, int length) {
  * @return 0 for success, -1 for failure
  */
  
-int gcrp_input(char *buf, int length) {
+int gcrp_input(gcrp_handtab_t *htab, char *buf, int length, void *roomdata) {
   gcrp_hdr_t *hdr = (gcrp_hdr_t *) buf;
   if (length < sizeof(gcrp_hdr_t)) {
-    garena_errno = GARENA_ERR_MALFORMED;
+    garena_errno = GARENA_ERR_PROTOCOL;
     IFDEBUG(fprintf(stderr, "[DEBUG/GCRP] Dropped short message.\n"));
     return -1;
   }
   if ((length - sizeof(gcrp_hdr_t) + 1) != ghtonl(hdr->msglen)) {
     IFDEBUG(fprintf(stderr, "[DEBUG/GCRP] Dropped malformed message."));
-    garena_errno = GARENA_ERR_MALFORMED;
+    garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-  if (gcrp_handlers[hdr->msgtype].fun == NULL) {
+  if ((hdr->msgtype < 0) || (hdr->msgtype >= GCRP_MSG_NUM) || (htab->gcrp_handlers[hdr->msgtype].fun == NULL)) {
     IFDEBUG(fprintf(stderr, "[DEBUG/GCRP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, hdr->msglen - 1));
   } else {
     
-    if (gcrp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gcrp_hdr_t), length - sizeof(gcrp_hdr_t), gcrp_handlers[hdr->msgtype].privdata) == -1) {
+    if (htab->gcrp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gcrp_hdr_t), length - sizeof(gcrp_hdr_t), htab->gcrp_handlers[hdr->msgtype].privdata, roomdata) == -1) {
       garena_perror("[WARN/GCRP] Error while handling message");
     }
   }
@@ -212,6 +243,22 @@ int gcrp_send_togglevpn(int sock, int user_id, int vpn) {
   }
 }
 
+/**
+ * Builds and send a GCRP PART message over a socket
+ *
+ * @param sock Socket used to send the message
+ * @param user_id The sender's user ID
+ * @return 0 for succes, -1 for failure
+ */
+int gcrp_send_part(int sock, int user_id) {
+  static char buf[GCRP_MAX_MSGSIZE];
+  gcrp_part_t *part = (gcrp_part_t *) buf;
+  part->user_id = ghtonl(user_id);
+  if (gcrp_output(sock, GCRP_MSG_PART, buf, sizeof(gcrp_part_t)) == -1) {
+    return -1;
+  }
+}
+
 
 /**
  * Register a handler to be called on incoming messages of type "msgtype".
@@ -222,18 +269,18 @@ int gcrp_send_togglevpn(int sock, int user_id, int vpn) {
  * @return 0 for success, -1 for failure
  */
  
-int gcrp_register_handler(int msgtype, gcrp_funptr_t *fun, void *privdata) {
+int gcrp_register_handler(gcrp_handtab_t *htab, int msgtype, gcrp_funptr_t *fun, void *privdata) {
   if ((msgtype < 0) || (msgtype >= GCRP_MSG_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
   }
   
-  if (gcrp_handlers[msgtype].fun != NULL) {
+  if (htab->gcrp_handlers[msgtype].fun != NULL) {
     garena_errno = GARENA_ERR_INUSE;
     return -1;
   }
-  gcrp_handlers[msgtype].fun = fun;
-  gcrp_handlers[msgtype].privdata = privdata;
+  htab->gcrp_handlers[msgtype].fun = fun;
+  htab->gcrp_handlers[msgtype].privdata = privdata;
   return 0;
 }
 
@@ -243,17 +290,17 @@ int gcrp_register_handler(int msgtype, gcrp_funptr_t *fun, void *privdata) {
  * @param msgtype The message type for which we delete the handler
  * @return 0 for success, -1 for failure
  */
-int gcrp_unregister_handler(int msgtype) {
+int gcrp_unregister_handler(gcrp_handtab_t *htab, int msgtype) {
   if ((msgtype < 0) || (msgtype >= GCRP_MSG_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
   }
-  if (gcrp_handlers[msgtype].fun == NULL) {
+  if (htab->gcrp_handlers[msgtype].fun == NULL) {
     garena_errno = GARENA_ERR_NOTFOUND;
     return -1;
   }
-  gcrp_handlers[msgtype].fun = NULL;
-  gcrp_handlers[msgtype].privdata = NULL;  
+  htab->gcrp_handlers[msgtype].fun = NULL;
+  htab->gcrp_handlers[msgtype].privdata = NULL;  
   return 0;
 }
 
@@ -264,15 +311,15 @@ int gcrp_unregister_handler(int msgtype) {
  * @param msgtype The message type of the handler we wish to retrieve the privdata
  * @return The privdata, or NULL if there is an error
  */
-void* gcrp_handler_privdata(int msgtype) {
+void* gcrp_handler_privdata(gcrp_handtab_t *htab, int msgtype) {
   if ((msgtype < 0) || (msgtype >= GCRP_MSG_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return NULL;
   }
-  if (gcrp_handlers[msgtype].fun == NULL) {
+  if (htab->gcrp_handlers[msgtype].fun == NULL) {
     garena_errno = GARENA_ERR_NOTFOUND;
     return NULL;
   }
- return gcrp_handlers[msgtype].privdata;
+ return htab->gcrp_handlers[msgtype].privdata;
 }
 
