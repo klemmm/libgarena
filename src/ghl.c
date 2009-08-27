@@ -53,7 +53,7 @@ int ghl_init(void) {
 
 static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam) {
   if (ctx->ghl_handlers[event].fun) {
-    return ctx->ghl_handlers[event].fun(event, eventparam, ctx->ghl_handlers[event].privdata);
+    return ctx->ghl_handlers[event].fun(ctx, event, eventparam, ctx->ghl_handlers[event].privdata);
   } else {
     IFDEBUG(printf("[GHL/DEBUG] Event %x was ignored.\n", event));
     return 0;
@@ -86,6 +86,7 @@ static int handle_peer_msg(int type, void *payload, int length, void *privdata, 
       udp_encap_ev.member = member;
       udp_encap_ev.sport = htons(udp_encap->sport);
       udp_encap_ev.dport = htons(udp_encap->dport);
+      udp_encap_ev.length = length - sizeof(gp2pp_udp_encap_t);
       udp_encap_ev.payload = udp_encap->payload;
       ghl_signal_event(ctx, GHL_EV_UDP_ENCAP, &udp_encap_ev);
       IFDEBUG(printf("[GHL/DEBUG] Received UDP_ENCAP from %s\n", member->name));
@@ -434,6 +435,7 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id)
   rh->got_members = 0;
   llist_add_head(ctx->rooms, rh);
   rh->timeout = ghl_new_timer(time(NULL) + GHL_JOIN_WAIT, handle_room_join_timeout, rh);
+  return(rh);
 }
 
 ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_ID) {
@@ -510,7 +512,14 @@ int ghl_talk(ghl_rh_t *rh, char *text) {
   return gcrp_send_talk(rh->roomsock, rh->room_ID, rh->ctx->my_ID, text);  
 }
 
-int ghl_udp_encap(ghl_rh_t *rh, int sport, int dport, char *payload, int length) {
+int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, int length) {
+  struct sockaddr_in fsocket;
+  
+  fsocket.sin_family = AF_INET;
+  fsocket.sin_port = member->external_port;
+  fsocket.sin_addr = member->external_ip;
+  
+  gp2pp_send_udp_encap(ctx->peersock, ctx->my_ID, sport, dport, payload, length, &fsocket);
 }
 
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
@@ -538,7 +547,7 @@ int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
  * @return 0 if no next timer is found, 1 otherwise
  */
  
-static int ghl_next_timer(struct timeval *tv) {
+int ghl_next_timer(struct timeval *tv) {
   ghl_timer_t *next;
   int now = time(NULL);
   tv->tv_sec = 0;

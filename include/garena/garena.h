@@ -16,6 +16,7 @@
 #endif
 
 
+#define GARENA_NETWORK "192.168.29.0"
 int garena_init(void);
 
 

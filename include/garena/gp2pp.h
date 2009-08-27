@@ -69,7 +69,7 @@ int gp2pp_input(gp2pp_handtab_t *tab, char *buf, int length, struct sockaddr_in 
 
 int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in *remote);
 int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote);
-
+int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, int length, struct sockaddr_in *remote);
 
 int gp2pp_register_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_funptr_t *fun, void *privdata);
 int gp2pp_unregister_handler(gp2pp_handtab_t *tab,int msgtype);

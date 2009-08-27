@@ -143,6 +143,21 @@ int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote) 
   return gp2pp_output(sock, GP2PP_MSG_HELLO_REQ, buf, sizeof(gp2pp_hello_req_t), from_ID, remote);
 }
 
+int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, int length, struct sockaddr_in *remote) {
+  static char buf[GP2PP_MAX_MSGSIZE];
+  gp2pp_udp_encap_t *udp_encap = (gp2pp_udp_encap_t *) buf;
+  if (length + sizeof(gp2pp_udp_encap_t) > sizeof(buf)) {
+    garena_errno = GARENA_ERR_INVALID;
+    return -1;
+  }
+  udp_encap->mbz = 0;
+  udp_encap->mbz2 = 0;
+  udp_encap->sport = htons(sport);
+  udp_encap->dport = htons(dport);
+  memcpy(buf + sizeof(gp2pp_udp_encap_t), payload, length);
+  return gp2pp_output(sock, GP2PP_MSG_UDP_ENCAP, buf, sizeof(gp2pp_udp_encap_t) + length, from_ID, remote);
+}
+
 /**
  * Register a handler to be called on incoming messages of type "msgtype".
  *
@@ -211,6 +226,8 @@ int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port) {
   char buf[32];
   uint32_t *id = (uint32_t*) &buf[1];
   struct sockaddr_in fsocket;
+  return 0;
+  
 
   /* test */
   struct sockaddr_in local;

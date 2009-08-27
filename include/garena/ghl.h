@@ -26,15 +26,16 @@ typedef struct {
 } ghl_timer_t;
 
 
+struct ghl_ctx_s;
 
-typedef int ghl_funptr_t(int event, void *event_data, void *privdata);
+typedef int ghl_funptr_t(struct ghl_ctx_s *ctx, int event, void *event_data, void *privdata);
 
 typedef struct {
   ghl_funptr_t *fun;
   void *privdata;
 } ghl_handler_t;
 
-typedef struct {
+typedef struct ghl_ctx_s {
   int servsock;
   int peersock;
   char myname[17];
@@ -45,6 +46,8 @@ typedef struct {
   gcrp_handtab_t *gcrp_htab; 
   ghl_timer_t *hello_timer;
 } ghl_ctx_t;
+
+
 
 typedef struct {
   int roomsock;
@@ -92,6 +95,7 @@ typedef struct {
   ghl_member_t *member;
   int sport;
   int dport;
+  int length;
   char *payload;
 } ghl_udp_encap_t;
 
@@ -106,7 +110,7 @@ ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_ID);
 ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_ID);
 int ghl_togglevpn(ghl_rh_t *rh, int vpn);
 int ghl_talk(ghl_rh_t *rh, char *text);
-int ghl_udp_encap(ghl_rh_t *rh, int sport, int dport, char *payload, int length);
+int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, int length);
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds);
 int ghl_process(ghl_ctx_t *ctx, fd_set *fds);
 int ghl_register_handler(ghl_ctx_t *ctx, int event, ghl_funptr_t *fun, void *privdata);
@@ -116,5 +120,6 @@ ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_ID);
 ghl_timer_t * ghl_new_timer(int when, ghl_timerfun_t *fun, void *privdata);
 void ghl_free_timer(ghl_timer_t *timer);
 void ghl_free_ctx(ghl_ctx_t *ctx);
+int ghl_next_timer(struct timeval *tv);
 
 #endif
