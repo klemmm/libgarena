@@ -577,8 +577,6 @@ int ghl_next_timer(struct timeval *tv) {
   next = llist_head(timers);
   if (next) {
     tv->tv_sec = (next->when) - now;
-    fprintf(deb, "next timer in %u\n", tv->tv_sec);
-    fflush(deb);
     return 1;
   }
   return 0;

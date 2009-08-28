@@ -634,7 +634,8 @@ int main(int argc, char **argv) {
     if (r == -1) {
       if ((errno == EINTR) || (errno == EAGAIN))
         continue;
-      perror("select");
+      fprintf(deb, "select: %s", strerror(errno));
+      fflush(deb);
       exit(-1);
     }
     if (FD_ISSET(0, &fds)) {
