@@ -627,13 +627,17 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 }
 
 int main(int argc, char **argv) {
-  char tun_name[] = "garena0";
+  char tun_name[IFNAMSIZ];
   fd_set fds;
   char buf[512];
   struct timeval tv;
   int r;
   int input = 0;
-  
+  if (argc != 2) {
+    printf("usage: %s <tunnel interface to use>\n", argv[0]);
+    exit(-1);
+  }
+  strncpy(tun_name, argv[1], IFNAMSIZ);
   tun_fd = tun_alloc(tun_name);
   if (tun_fd == -1) {
     perror("tun_alloc");
