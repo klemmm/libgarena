@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include <ncurses.h>
 #include <garena/error.h>
 #include <garena/garena.h>
@@ -83,6 +84,7 @@ int screen_input(screen_ctx_t *screen, char *buf, int len) {
     
     if (cur == 0) {
       r = mvwgetch(screen->cmd, 1, 2);
+          
     } else r = wgetch(screen->cmd);
     
 /*    mvwhline(screen->cmd, 0, 0, 0, COLS);
@@ -94,6 +96,25 @@ int screen_input(screen_ctx_t *screen, char *buf, int len) {
     
     if (r == ERR)
       return -1;
+    
+    if (r == KEY_RESIZE) {
+      wprintw(screen->text, "we were resized: %u %u\n", LINES, COLS);
+      wresize(screen->text, LINES-2, COLS);
+      wresize(screen->cmd, 2, COLS);
+      delwin(screen->cmd);
+      screen->cmd = newwin(2, COLS, LINES-2, 0);
+      scrollok(screen->cmd, true);
+      keypad(screen->cmd, true);
+      
+      mvwhline(screen->cmd, 0, 0, 0, COLS);
+      mvwprintw(screen->cmd, 1, 0, "> ");
+
+      wrefresh(screen->text);
+      wrefresh(screen->cmd);
+      cur = 0;
+      
+      return 0;
+    }
     if (r == KEY_BACKSPACE) {
       if (cur > 0) {
         getyx(screen->cmd, y,x);
@@ -596,6 +617,7 @@ void handle_command(screen_ctx_t *screen, char *buf) {
   }
 }
 
+
 void handle_text(screen_ctx_t *screen, char *buf) {
   if (strlen(buf) == 0)
     return;
@@ -620,6 +642,7 @@ int main(int argc, char **argv) {
   garena_init();
   
   screen_init(&screen);
+
   while(!quit) {
     FD_ZERO(&fds);
     r = ctx ? ghl_fill_fds(ctx, &fds) : 0;
