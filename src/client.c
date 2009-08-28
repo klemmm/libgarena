@@ -99,7 +99,6 @@ int screen_input(screen_ctx_t *screen, char *buf, int len) {
       return -1;
     
     if (r == KEY_RESIZE) {
-      wprintw(screen->text, "we were resized: %u %u\n", LINES, COLS);
       wresize(screen->text, LINES-2, COLS);
       wresize(screen->cmd, 2, COLS);
       delwin(screen->cmd);
