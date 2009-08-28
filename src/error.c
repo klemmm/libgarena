@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <garena/error.h>
+#include <garena/garena.h>
 
 long garena_errno = 0;
 
@@ -24,7 +25,7 @@ static char *errstr[] = {
  */
 void garena_perror(char *msg) {
   if (garena_errno == GARENA_ERR_LIBC) {
-    fprintf(stderr, "%s: libc error: %s\n", msg, strerror(errno));
+    fprintf(deb, "%s: libc error: %s\n", msg, strerror(errno));
   } else {
     fprintf(stderr, "%s: garena error: %s\n", msg, errstr[-garena_errno]);
   }

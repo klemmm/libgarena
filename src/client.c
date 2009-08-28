@@ -33,6 +33,7 @@
 #define IP_OFFSET3 33
 
 
+char tun_name[IFNAMSIZ];
 int tun_fd;
 
 int routing_host=INADDR_NONE;
@@ -206,7 +207,7 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
     }
     screen_output(&screen, "\n");
 
-    snprintf(cmd, 128, "/sbin/ifconfig garena0 192.168.29.%u netmask 255.255.255.0", join->rh->me->virtual_suffix);
+    snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.29.%u netmask 255.255.255.0", tun_name, join->rh->me->virtual_suffix);
     system(cmd);
   } else {
     screen_output(&screen, "Room join failed (timeout)\n");
@@ -626,8 +627,8 @@ void handle_text(screen_ctx_t *screen, char *buf) {
   } else screen_output(screen, "You are not in a room\n");
 }
 
+
 int main(int argc, char **argv) {
-  char tun_name[IFNAMSIZ];
   fd_set fds;
   char buf[512];
   struct timeval tv;
