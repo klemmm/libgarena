@@ -176,7 +176,7 @@ static int handle_room_join(int type, void *payload, int length, void *privdata,
       }
       
       if (rh->me == NULL) {
-        fprintf(stderr, "[GHL/ERROR] Joined a room, but we are not in the member list. Leaving now.\n");
+        fprintf(deb, "[GHL/ERROR] Joined a room, but we are not in the member list. Leaving now.\n");
         garena_errno = GARENA_ERR_PROTOCOL;
         llist_empty_val(rh->members);
         return -1;
