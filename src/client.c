@@ -52,13 +52,13 @@ screen_ctx_t screen;
 void screen_init(screen_ctx_t *screen) {
   int x, y;
   initscr();
-  nocbreak();
+  cbreak();
   noecho();
   screen->text = newwin(LINES-2, COLS, 0, 0);
   screen->cmd = newwin(2, COLS, LINES-2, 0);
   scrollok(screen->text, true);
   scrollok(screen->cmd, true);
-  wtimeout(screen->cmd,20);
+  keypad(screen->cmd, true);
 
   mvwhline(screen->cmd, 0, 0, 0, COLS);
   mvwprintw(screen->cmd, 1, 0, "> ");
@@ -76,16 +76,49 @@ void screen_output(screen_ctx_t *screen, char *buf) {
 }
 
 int screen_input(screen_ctx_t *screen, char *buf, int len) {
+    static int cur = 0;
     int x,y;
+    int tmp;
     int r;
-    r = mvwgetnstr(screen->cmd, 1, 2, buf, len);
-    mvwhline(screen->cmd, 0, 0, 0, COLS);
+    
+    if (cur == 0) {
+      r = mvwgetch(screen->cmd, 1, 2);
+    } else r = wgetch(screen->cmd);
+    
+/*    mvwhline(screen->cmd, 0, 0, 0, COLS);
     mvwprintw(screen->cmd, 1, 0, "> ");
+*/
+
     wrefresh(screen->text);
     wrefresh(screen->cmd);
-    if (r == ERR) {
+    
+    if (r == ERR)
       return -1;
-    } else return strlen(buf);
+    if (r == KEY_BACKSPACE) {
+      if (cur > 0) {
+        getyx(screen->cmd, y,x);
+        mvwprintw(screen->cmd, y, x-1, " ");
+        mvwprintw(screen->cmd, y, x-1, "");
+        wrefresh(screen->cmd);
+        cur--;
+      }
+      return 0;
+    }
+          
+    if ((cur == (len-1)) || (r == '\n')) {
+      buf[cur] = 0;
+      tmp = cur;
+      cur = 0;
+      mvwhline(screen->cmd, 1, 0, ' ', COLS);
+      mvwprintw(screen->cmd, 1, 0, "> ");
+      return tmp;
+    } else {
+      wprintw(screen->cmd, "%c", r);
+      wrefresh(screen->cmd);
+      buf[cur] = r;
+      cur++;
+      return 0;
+    }
 }
 
 
@@ -348,7 +381,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   }
 }
 
-#define MAX_CMDS 8
+#define MAX_CMDS 10
 #define MAX_PARAMS 16
 
 typedef int cmdfun_t(screen_ctx_t *screen, int parc, char **parv);
@@ -447,6 +480,40 @@ int handle_cmd_routing(screen_ctx_t *screen, int parc, char **parv) {
   return 0;
 }
 
+int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
+  char buf[512];
+  ghl_member_t *member;
+  cell_t iter;
+  if (parc != 2) {
+    screen_output(screen, "Usage: /WHOIS <name|IP|ID>\n");
+    return -1;
+  }
+  if (!rh || !rh->joined) {
+      screen_output(screen, "You are not in a room\n");
+      return - 1;
+  }
+  for (iter = llist_iter(rh->members); iter; iter = llist_next(iter)) {
+      member = llist_val(iter);
+      
+      if  ((strcasecmp(member->name, parv[1]) == 0) ||
+          ( ((member->virtual_suffix << 24) | inet_addr(GARENA_NETWORK)) == inet_addr(parv[1]) ) ||
+          (member->external_ip.s_addr == inet_addr(parv[1])) ||
+          (ghtonl(member->user_id) == strtol(parv[1], NULL, 16))) {
+           snprintf(buf, 512, "Member name: %s\nUser ID: %x\nCountry: %s\nLevel: %u\nIn game: %s\nVirtual IP: 192.168.29.%u\n", member->name, member->user_id, member->country, member->level, member->vpn ? "yes" : "no", member->virtual_suffix);
+          screen_output(screen, buf);
+          snprintf(buf, 512, "External ip/port: %s:%u\n", inet_ntoa(member->external_ip), htons(member->external_port));
+          screen_output(screen, buf);
+          snprintf(buf, 512, "Internal ip/port: %s:%u\n", inet_ntoa(member->internal_ip), htons(member->internal_port));
+          screen_output(screen, buf);
+
+          return 0;
+      }
+  }
+  screen_output(screen, "User not found.\n");
+  return -1;
+
+}
+
 int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
     char buf[512];
     cell_t iter;
@@ -485,7 +552,9 @@ cmd_t cmdtab[MAX_CMDS] = {
  {handle_cmd_startgame, "STARTGAME"},
  {handle_cmd_stopgame, "STOPGAME"},
  {handle_cmd_who, "WHO"},
- {handle_cmd_routing, "ROUTING"}
+ {handle_cmd_routing, "ROUTING"},
+ {handle_cmd_whois, "WHOIS"},
+ {NULL, NULL}
 };
  
 void handle_command(screen_ctx_t *screen, char *buf) {
@@ -570,10 +639,12 @@ int main(int argc, char **argv) {
     }
     if (FD_ISSET(0, &fds)) {
       r = screen_input(&screen, buf, sizeof(buf));
-      if ((r > 0) && (buf[0] == '/')) {
-        handle_command(&screen, buf + 1);
-      } else {
-        handle_text(&screen, buf);
+      if (r > 0) {
+        if (buf[0] == '/') {
+          handle_command(&screen, buf + 1);
+        } else {
+          handle_text(&screen, buf);
+        }
       }
     }
     if (FD_ISSET(tun_fd, &fds)) {
