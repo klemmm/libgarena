@@ -179,6 +179,24 @@ int ip_chksum(char *buffer, int length)
 }
 
 
+int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+  screen_output(&screen, "Received a connection. \n");
+  return 0;
+}
+
+int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+  char *buf;;
+  ghl_conn_recv_t *conn_recv = event_param;
+  buf = malloc(conn_recv->length + 1);
+  memcpy(buf, conn_recv->payload, conn_recv->length);
+  buf[conn_recv->length] = 0;
+  screen_output(&screen, "Received data: ");
+  screen_output(&screen, buf);
+  screen_output(&screen, "\n");
+  free(buf);
+  return 0;
+}
+
 int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_me_join_t *join = event_param;
   cell_t iter;
@@ -218,21 +236,21 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
 int handle_talk(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_talk_t *talk = event_param;
   char buf[512];
-  snprintf(buf, 512, "%x <%s> %s\n", talk->rh->room_ID, talk->member->name, talk->text);
+  snprintf(buf, 512, "%x <%s> %s\n", talk->rh->room_id, talk->member->name, talk->text);
   screen_output(&screen, buf);
 }
 
 int handle_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_join_t *join = event_param;
   char buf[512];
-  snprintf(buf, 512, "%x %s[%x] joined the room.\n", join->rh->room_ID, join->member->name, join->member->user_id);
+  snprintf(buf, 512, "%x %s[%x] joined the room.\n", join->rh->room_id, join->member->name, join->member->user_id);
   screen_output(&screen, buf);
 }
 
 int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_part_t *part = event_param;
   char buf[512];
-  snprintf(buf, 512, "%x %s left the room.\n", part->rh->room_ID, part->member->name);
+  snprintf(buf, 512, "%x %s left the room.\n", part->rh->room_id, part->member->name);
   screen_output(&screen, buf);
 }
 
@@ -286,7 +304,7 @@ int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
 int handle_togglevpn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_togglevpn_t *togglevpn = event_param;
   char buf[512];
-  snprintf(buf, 512, "%x %s %s a game.\n", togglevpn->rh->room_ID, togglevpn->member->name, togglevpn->vpn ? "started" : "stopped");
+  snprintf(buf, 512, "%x %s %s a game.\n", togglevpn->rh->room_id, togglevpn->member->name, togglevpn->vpn ? "started" : "stopped");
   screen_output(&screen, buf);
 }
 
@@ -422,12 +440,20 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
     return -1;
   }
   ctx = ghl_new_ctx(parv[1], "tamere", 0x128829c, inet_addr("74.55.122.122"), 0);
+  if (ctx == NULL) {
+    screen_output(screen, "Context creation failed\n");
+    return -1;
+  }
+  
   ghl_register_handler(ctx, GHL_EV_ME_JOIN, handle_me_join, NULL);
   ghl_register_handler(ctx, GHL_EV_TALK, handle_talk, NULL);
   ghl_register_handler(ctx, GHL_EV_JOIN, handle_join, NULL);
   ghl_register_handler(ctx, GHL_EV_PART, handle_part, NULL);
   ghl_register_handler(ctx, GHL_EV_TOGGLEVPN, handle_togglevpn, NULL);
   ghl_register_handler(ctx, GHL_EV_UDP_ENCAP, handle_udp_encap, NULL);
+
+  ghl_register_handler(ctx, GHL_EV_CONN_INCOMING, handle_conn_incoming, NULL);
+  ghl_register_handler(ctx, GHL_EV_CONN_RECV, handle_conn_recv, NULL);
   return 0;
 }
 

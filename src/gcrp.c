@@ -15,6 +15,7 @@
 #include <garena/util.h>
 
 
+/*
 
 char GCRP_JOINCODE[] = {
 0x00, 0x00, 0x00, 0x00, 0x3d, 0x00, 0x00, 
@@ -33,6 +34,8 @@ char GCRP_JOINCODE[] = {
 0x62, 0x36, 0x36, 0x30, 0x30, 0x34, 0x30, 0x63, 
 0x30, 0x64, 0x32, 0x62, 0x35, 0x00, 0x00 };
 
+
+*/
 
 int gcrp_init(void) {
   return 0;
@@ -267,7 +270,7 @@ int gcrp_send_part(int sock, int user_id) {
  * @return 0 for success, -1 for failure
  */
  
-int gcrp_register_handler(gcrp_handtab_t *htab, int msgtype, gcrp_funptr_t *fun, void *privdata) {
+int gcrp_register_handler(gcrp_handtab_t *htab, int msgtype, gcrp_fun_t *fun, void *privdata) {
   if ((msgtype < 0) || (msgtype >= GCRP_MSG_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;

@@ -12,6 +12,7 @@
 
 static llist_t timers;
 static int ghl_free_room(ghl_rh_t *rh);
+static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt);
 
 static int send_hello_to_all(ghl_ctx_t *ctx) {
   cell_t iter, iter2;
@@ -25,15 +26,20 @@ static int send_hello_to_all(ghl_ctx_t *ctx) {
     rh = llist_val(iter);
     for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
       cur = llist_val(iter2);
-      if (cur->user_id == ctx->my_ID)
+      if (cur->user_id == ctx->my_id)
         continue;
       remote.sin_addr = cur->external_ip;
       remote.sin_port = cur->external_port;
-      gp2pp_send_hello_request(ctx->peersock, ctx->my_ID, &remote);
+      gp2pp_send_hello_request(ctx->peersock, ctx->my_id, &remote);
     }
   }
 }
 
+
+static int do_conn_retrans(void *privdata) {
+  ghl_ctx_t *ctx = privdata;
+  ctx->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_INTERVAL, do_conn_retrans, privdata);
+}
 
 static int do_hello(void *privdata) {
   ghl_ctx_t *ctx = privdata;
@@ -60,6 +66,98 @@ static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam) {
   }
 }
 
+static int handle_initconn_msg(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
+  gp2pp_initconn_t *initconn = payload;
+  ghl_conn_incoming_t conn_incoming_ev;
+  ghl_ctx_t *ctx = privdata;
+  fprintf(deb, "Received INITCONN message from %s:%u\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port));
+  fflush(deb);
+  conn_incoming_ev.ch = malloc(sizeof(ghl_ch_t));
+  conn_incoming_ev.ch->member = ghl_global_find_member(ctx, user_id);
+  if (conn_incoming_ev.ch->member == NULL) {
+    free(conn_incoming_ev.ch);
+    fprintf(deb, "Received INITCONN from unknown user %x\n", user_id);
+    garena_errno = GARENA_ERR_PROTOCOL;
+    return -1;
+  }
+  conn_incoming_ev.ch->ts_base = gp2pp_get_tsnow();
+  conn_incoming_ev.ch->sendq = llist_alloc();
+  conn_incoming_ev.ch->recvq = llist_alloc();
+  conn_incoming_ev.ch->snd_una = 0;
+  conn_incoming_ev.ch->ctx = ctx;
+  conn_incoming_ev.ch->snd_next = 0;
+  conn_incoming_ev.ch->rcv_next = 0;
+  conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
+  conn_incoming_ev.ch->conn_id = ghtonl(initconn->conn_id);
+  conn_incoming_ev.dport = ghtons(initconn->dport);
+  llist_add_head(ctx->conns, conn_incoming_ev.ch);
+  ghl_signal_event(ctx, GHL_EV_CONN_INCOMING, &conn_incoming_ev);
+  return 0;
+}
+
+static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
+  int seq;
+  cell_t iter;
+  ghl_conn_recv_t conn_recv_ev;
+  ghl_ch_pkt_t *pkt;
+  ghl_ch_pkt_t *old = NULL;
+  
+  if (llist_is_empty(ch->recvq))
+    return;
+ 
+  for (seq = ch->rcv_next, iter = llist_iter(ch->recvq); iter; iter = llist_next(iter), seq++) {
+    pkt = llist_val(iter);
+    if (pkt->seq != seq)
+      break;
+      conn_recv_ev.ch = ch;
+      conn_recv_ev.payload = pkt->payload;
+      conn_recv_ev.length = pkt->length;
+      ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+      if (old) {
+        llist_del_item(ch->recvq, old);
+        free(old->payload);
+        free(old);
+      }
+      old = pkt;
+  }
+  ch->rcv_next = seq;
+  if (old) {
+    llist_del_item(ch->recvq, old);
+    free(old->payload);
+    free(old);
+  }
+
+}
+
+static int handle_conn_data_msg(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
+  ghl_ctx_t *ctx = privdata;
+  ghl_ch_t *ch = ghl_conn_from_id(ctx, conn_id);
+  ghl_ch_pkt_t *pkt;
+    
+  if (ch == NULL) {
+    fprintf(deb, "Alien conn: %x\n", conn_id);
+    fflush(deb);
+    garena_errno = GARENA_ERR_PROTOCOL;
+    return -1;
+  }
+
+  fprintf(deb, "Received CONN DATA message from %s:%u\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port));
+  fflush(deb);
+  
+  pkt = malloc(sizeof(ghl_ch_pkt_t));
+  pkt->length = length;
+  pkt->payload = malloc(length);
+  pkt->seq = seq1;
+  pkt->ts_rel = ts_rel;
+  pkt->ch = ch;
+  memcpy(pkt->payload, payload, length);
+  insert_pkt(ch->recvq, pkt);
+  try_deliver(ctx, ch);
+  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, ctx->my_id, conn_id, seq1, ch->rcv_next, 0, remote);
+  
+  return 0;
+}
+
 static int handle_peer_msg(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
   gp2pp_hello_req_t *hello_req = payload;
   gp2pp_hello_rep_t *hello_rep = payload;
@@ -77,7 +175,7 @@ static int handle_peer_msg(int type, void *payload, int length, void *privdata, 
     case GP2PP_MSG_HELLO_REQ:
       IFDEBUG(printf("[GHL/DEBUG] Received HELLO request from %s\n", member->name));
       remote->sin_port = member->external_port;
-      gp2pp_send_hello_reply(ctx->peersock, ctx->my_ID, user_id, remote);
+      gp2pp_send_hello_reply(ctx->peersock, ctx->my_id, user_id, remote);
       
       break;
     case GP2PP_MSG_HELLO_REP:
@@ -104,7 +202,7 @@ static int handle_room_join_timeout(void *privdata) {
   int err = 0;
   ghl_me_join_t join;
   ghl_rh_t *rh = privdata;
-/*  printf("Room %x join timeouted.\n", rh->room_ID); */
+/*  printf("Room %x join timeouted.\n", rh->room_id); */
   join.result = -1;
   join.rh = rh;
   err |= (ghl_signal_event(rh->ctx, GHL_EV_ME_JOIN, &join) == -1);
@@ -124,11 +222,11 @@ static int send_hello_to_members(ghl_rh_t *rh) {
   
   for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
     cur = llist_val(iter2);
-    if (cur->user_id == ctx->my_ID)
+    if (cur->user_id == ctx->my_id)
       continue;
     remote.sin_addr = cur->external_ip;
     remote.sin_port = cur->external_port;
-    gp2pp_send_hello_request(ctx->peersock, ctx->my_ID, &remote);
+    gp2pp_send_hello_request(ctx->peersock, ctx->my_id, &remote);
   }
 }
 
@@ -181,7 +279,7 @@ static int handle_room_join(int type, void *payload, int length, void *privdata,
         llist_empty_val(rh->members);
         return -1;
       }
-      ctx->my_ID = rh->me->user_id;
+      ctx->my_id = rh->me->user_id;
       rh->got_members = 1;
       break;  
 
@@ -231,11 +329,11 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
       join_ev.rh = rh;
       join_ev.member = member;
       ghl_signal_event(ctx, GHL_EV_JOIN, &join_ev);
-      if (member->user_id != ctx->my_ID) {
+      if (member->user_id != ctx->my_id) {
         remote.sin_family = AF_INET;
         remote.sin_port = member->external_port;
         remote.sin_addr = member->external_ip;
-        gp2pp_send_hello_request(ctx->peersock, ctx->my_ID, &remote);
+        gp2pp_send_hello_request(ctx->peersock, ctx->my_id, &remote);
       }
 
       break;
@@ -320,7 +418,7 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int
   ctx->gp2pp_htab = NULL;
   ctx->gcrp_htab = NULL;
   ctx->peersock = -1;
-  ctx->my_ID = my_id;
+  ctx->my_id = my_id;
   ctx->hello_timer = NULL;
     
   ctx->servsock = socket(PF_INET, SOCK_STREAM, 0);
@@ -351,6 +449,13 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int
     goto err;
   }
   
+  ctx->conns = llist_alloc();
+  if (ctx->conns == NULL) {
+    garena_errno = GARENA_ERR_NORESOURCE;
+    goto err;
+  }
+  
+  
   for (i = 0 ; i < GHL_EV_NUM; i++) {
     ctx->ghl_handlers[i].fun = NULL;
     ctx->ghl_handlers[i].privdata = NULL;
@@ -362,11 +467,11 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int
   if (ctx->gp2pp_htab == NULL)
     goto err;
   
+  /* GCRP handlers */
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_WELCOME, handle_room_join, ctx) == -1)
     goto err;
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_MEMBERS, handle_room_join, ctx) == -1)
     goto err;
-
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_JOIN, handle_room_activity, ctx) == -1)
     goto err;
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_PART, handle_room_activity, ctx) == -1)
@@ -378,14 +483,25 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_STOPVPN, handle_room_activity, ctx) == -1)
     goto err;
     
+    /* GP2PP handlers */
   if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_UDP_ENCAP, handle_peer_msg, ctx) == -1)
     goto err;
   if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_HELLO_REQ, handle_peer_msg, ctx) == -1)
     goto err;
   if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_HELLO_REP, handle_peer_msg, ctx) == -1)
     goto err;
+  if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_INITCONN, handle_initconn_msg, ctx) == -1)
+    goto err;
 
+  /* GP2PP CONN handlers */
+
+  if (gp2pp_register_conn_handler(ctx->gp2pp_htab, GP2PP_CONN_MSG_DATA, handle_conn_data_msg, ctx) == -1)
+    goto err;
+
+  /* timers handlers */
   if ((ctx->hello_timer = ghl_new_timer(time(NULL) + GP2PP_HELLO_INTERVAL, do_hello, ctx)) == NULL)
+    goto err;
+  if ((ctx->hello_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_INTERVAL, do_conn_retrans, ctx)) == NULL)
     goto err;
 
   return ctx;
@@ -401,6 +517,8 @@ err:
     close(ctx->peersock);
   if (ctx->rooms)
     llist_free(ctx->rooms);
+  if (ctx->conns)
+    llist_free(ctx->conns);
   if (ctx->hello_timer)
     ghl_free_timer(ctx->hello_timer);
   free(ctx);
@@ -442,7 +560,7 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id)
 
   rh->ctx = ctx;
   rh->joined = 0;
-  rh->room_ID = room_id;
+  rh->room_id = room_id;
   rh->me = NULL;
   
   rh->members = llist_alloc();
@@ -459,12 +577,12 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id)
   return(rh);
 }
 
-ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_ID) {
+ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_id) {
   cell_t iter;
   ghl_rh_t *cur;
   for (iter = llist_iter(ctx->rooms); iter ; iter = llist_next(iter)) {
     cur = llist_val(iter);
-    if (cur->room_ID == room_ID)
+    if (cur->room_id == room_id)
       return cur;
   }
   garena_errno = GARENA_ERR_NOTFOUND;
@@ -472,12 +590,12 @@ ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_ID) {
 }
 
 
-ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_ID) {
+ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_id) {
   cell_t iter;
   ghl_member_t *cur;
   for (iter = llist_iter(rh->members); iter ; iter = llist_next(iter)) {
     cur = llist_val(iter);
-    if (cur->user_id == user_ID)
+    if (cur->user_id == user_id)
       return cur;
   }
   garena_errno = GARENA_ERR_NOTFOUND;
@@ -485,7 +603,19 @@ ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_ID) {
 }
 
 
-ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_ID) {
+ghl_ch_t *ghl_conn_from_id(ghl_ctx_t *ctx, int conn_id) {
+  cell_t iter;
+  ghl_ch_t *cur;
+  for (iter=llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+    cur = llist_val(iter);
+    if (cur->conn_id == conn_id)
+      return cur;
+  }
+  garena_errno = GARENA_ERR_NOTFOUND;
+  return NULL;
+}
+
+ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_id) {
   cell_t iter, iter2;
   ghl_member_t *cur;
   ghl_rh_t *rh; 
@@ -494,7 +624,7 @@ ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_ID) {
     rh = llist_val(iter);
     for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
       cur = llist_val(iter2);
-      if (cur->user_id == user_ID)
+      if (cur->user_id == user_id)
         return cur;
     }
   }
@@ -520,18 +650,18 @@ static int ghl_free_room(ghl_rh_t *rh) {
 }
 
 int ghl_leave_room(ghl_rh_t *rh) {
-  if (gcrp_send_part(rh->roomsock, rh->ctx->my_ID) == -1) {
+  if (gcrp_send_part(rh->roomsock, rh->ctx->my_id) == -1) {
     return -1;
   }
   return ghl_free_room(rh);
 }
 
 int ghl_togglevpn(ghl_rh_t *rh, int vpn) {
-  return gcrp_send_togglevpn(rh->roomsock, rh->ctx->my_ID, vpn);
+  return gcrp_send_togglevpn(rh->roomsock, rh->ctx->my_id, vpn);
 }
 
 int ghl_talk(ghl_rh_t *rh, char *text) {
-  return gcrp_send_talk(rh->roomsock, rh->room_ID, rh->ctx->my_ID, text);  
+  return gcrp_send_talk(rh->roomsock, rh->room_id, rh->ctx->my_id, text);  
 }
 
 int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, int length) {
@@ -541,7 +671,7 @@ int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, ch
   fsocket.sin_port = member->external_port;
   fsocket.sin_addr = member->external_ip;
   
-  gp2pp_send_udp_encap(ctx->peersock, ctx->my_ID, sport, dport, payload, length, &fsocket);
+  gp2pp_send_udp_encap(ctx->peersock, ctx->my_id, sport, dport, payload, length, &fsocket);
 }
 
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
@@ -663,7 +793,7 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
  * @return 0 for success, -1 for failure
  */
  
-int ghl_register_handler(ghl_ctx_t *ctx, int event, ghl_funptr_t *fun, void *privdata) {
+int ghl_register_handler(ghl_ctx_t *ctx, int event, ghl_fun_t *fun, void *privdata) {
   if ((event < 0) || (event >= GHL_EV_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
@@ -699,8 +829,30 @@ ghl_timer_t * ghl_new_timer(int when, ghl_timerfun_t *fun, void *privdata) {
     if (cur->when >= tmp->when)
       break;
   }
-  llist_add_before(timers, cur, tmp);
+  if (iter) {
+    llist_add_before(timers, cur, tmp);
+  } else {
+    llist_add_tail(timers, tmp);
+  }
   return tmp;
+}
+
+static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt) {
+  ghl_ch_pkt_t *cur;
+  cell_t iter;
+  
+  for (iter = llist_iter(list); iter; iter = llist_next(iter)) {
+    cur = llist_val(iter);
+    if (cur->seq == pkt->seq)
+      return; /* we already have this packet */
+    if ((cur->seq - pkt->seq) >= 0)
+      break;
+  }
+  if (iter) {
+    llist_add_before(list, cur, pkt);
+  } else {
+    llist_add_tail(list, pkt);
+  }
 }
 
 /**
@@ -762,4 +914,27 @@ void ghl_free_ctx(ghl_ctx_t *ctx) {
   free(ctx->gcrp_htab);
   free(ctx->gp2pp_htab);
   free(ctx);
+}
+
+
+ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
+}
+
+
+void ghl_conn_close(ghl_ch_t *ch) {
+}
+
+int ghl_conn_send(ghl_ch_t *ch, char *payload, int length) {
+  ghl_ch_pkt_t *pkt;
+  int now = gp2pp_get_tsnow();
+  pkt = malloc(sizeof(ghl_ch_pkt_t));
+  pkt->length = length;
+  pkt->payload = malloc(length);
+  pkt->seq = ch->snd_next;
+  pkt->ts_rel = (now - ch->ts_base);
+  pkt->ch = ch;
+  
+  ch->snd_next++;
+  ch->ts_base = now;
+  
 }

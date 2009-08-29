@@ -31,6 +31,10 @@ gp2pp_handtab_t *gp2pp_alloc_handtab (void) {
     htab->gp2pp_handlers[i].fun = NULL;
     htab->gp2pp_handlers[i].privdata = NULL;
   }
+  for (i = 0; i < GP2PP_CONN_MSG_NUM; i++) {
+    htab->gp2pp_conn_handlers[i].fun = NULL;
+    htab->gp2pp_conn_handlers[i].privdata = NULL;
+  }
   return htab; 
 }  
 
@@ -59,6 +63,24 @@ int gp2pp_read(int sock, char *buf, int length, struct sockaddr_in *remote) {
   return r;
 }
 
+
+static int gp2pp_handle_conn_pkt(gp2pp_handtab_t *htab, char *buf, int length, struct sockaddr_in *remote) {
+  gp2pp_conn_hdr_t *pkt = (gp2pp_conn_hdr_t*) buf;
+  if (length < sizeof(gp2pp_conn_hdr_t)) {
+    garena_errno = GARENA_ERR_PROTOCOL;
+    IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Dropped short message.\n"));
+    return -1;
+  }
+  if ((pkt->msgsubtype < 0) || (pkt->msgsubtype > GP2PP_CONN_MSG_NUM) || (htab->gp2pp_conn_handlers[pkt->msgsubtype].fun == NULL)) {
+    fprintf(deb, "[DEBUG/GP2PP] Unhandled CONN message of subtype: %x\n", pkt->msgsubtype);
+    fflush(deb);
+  } else {
+    if (htab->gp2pp_conn_handlers[pkt->msgsubtype].fun(pkt->msgsubtype, buf + sizeof(gp2pp_conn_hdr_t), length - sizeof(gp2pp_conn_hdr_t), htab->gp2pp_conn_handlers[pkt->msgsubtype].privdata,ghtonl(pkt->user_id), ghtonl(pkt->conn_id), ghtonl(pkt->seq1), ghtonl(pkt->seq2), ghtons(pkt->ts_rel), remote) == -1) {
+/*      garena_perror("[WARN/GP2PP] Error while handling message"); */
+    }
+
+  }
+}
 /**
  * Processes a received GP2PP message and calls any
  * registered callback to handle the message.
@@ -69,24 +91,34 @@ int gp2pp_read(int sock, char *buf, int length, struct sockaddr_in *remote) {
  * @return 0 for success, -1 for failure
  */
  
-int gp2pp_input(gp2pp_handtab_t *htab,char *buf, int length, struct sockaddr_in *remote) {
+int gp2pp_input(gp2pp_handtab_t *htab, char *buf, int length, struct sockaddr_in *remote) {
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
+  fprintf(deb, "Received %x\n", hdr->msgtype);
+  fflush(deb);
   if (length < sizeof(gp2pp_hdr_t)) {
     garena_errno = GARENA_ERR_PROTOCOL;
     IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Dropped short message.\n"));
     return -1;
   }
 
+  /*
+   * Need special handling for type 0x0D packets, since they do not conform to the 
+   * regular format. Who invented this shitty protocol? 
+   */
+  if (hdr->msgtype == GP2PP_MSG_CONN_PKT)
+    return gp2pp_handle_conn_pkt(htab, buf, length, remote);
+    
   if ((hdr->msgtype < 0) || (hdr->msgtype >= GP2PP_MSG_NUM) || (htab->gp2pp_handlers[hdr->msgtype].fun == NULL)) {
     fprintf(deb, "[DEBUG/GP2PP] Unhandled message of type: %x\n", hdr->msgtype);
     fflush(deb);
   } else {
     
-    if (htab->gp2pp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gp2pp_hdr_t), length - sizeof(gp2pp_hdr_t), htab->gp2pp_handlers[hdr->msgtype].privdata, ghtonl(hdr->user_ID), remote) == -1) {
+    if (htab->gp2pp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gp2pp_hdr_t), length - sizeof(gp2pp_hdr_t), htab->gp2pp_handlers[hdr->msgtype].privdata, ghtonl(hdr->user_id), remote) == -1) {
 /*      garena_perror("[WARN/GP2PP] Error while handling message"); */
     }
   }
 }
+
 
 
 /**
@@ -99,23 +131,64 @@ int gp2pp_input(gp2pp_handtab_t *htab,char *buf, int length, struct sockaddr_in 
   * @param remote The destination address of the message
   * @return 0 for success, -1 for failure
   */
-int gp2pp_output(int sock, int type, char *payload, int length, int user_ID, struct sockaddr_in *remote) {
+int gp2pp_output(int sock, int type, char *payload, int length, int user_id, struct sockaddr_in *remote) {
   static char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
-  if (length + sizeof(gp2pp_hdr_t) > GP2PP_MAX_MSGSIZE) {
+  int hdrsize = sizeof(gp2pp_hdr_t);
+    
+  if (length + hdrsize > GP2PP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
   }
-  hdr->msgtype = type;
-  hdr->user_ID = ghtonl(user_ID);
   
-  memcpy(buf + sizeof(gp2pp_hdr_t), payload, length);
-  if (sendto(sock, buf, length + sizeof(gp2pp_hdr_t), 0, (struct sockaddr *) remote, sizeof(struct sockaddr_in)) == -1) {
+  hdr->msgtype = type;
+  hdr->user_id = ghtonl(user_id);
+  
+  memcpy(buf + hdrsize, payload, length);
+  if (sendto(sock, buf, length + hdrsize, 0, (struct sockaddr *) remote, sizeof(struct sockaddr_in)) == -1) {
     garena_errno = GARENA_ERR_LIBC;
     return -1;
   }
   IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Sent a message of type %x (payload length = %x)\n", type, length));
   return 0;
+}
+
+int gp2pp_output_conn(int sock, int subtype, char *payload, int length, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
+  static char buf[GP2PP_MAX_MSGSIZE];
+  int type = GP2PP_MSG_CONN_PKT;
+  gp2pp_conn_hdr_t *conn_hdr = (gp2pp_conn_hdr_t *) buf;
+  int hdrsize = sizeof(gp2pp_conn_hdr_t);
+    
+  if (length + hdrsize > GP2PP_MAX_MSGSIZE) {
+    garena_errno = GARENA_ERR_INVALID;
+    return -1;
+  }
+  
+  conn_hdr->msgtype = type;
+  conn_hdr->msgsubtype = subtype;
+  conn_hdr->user_id = ghtonl(user_id);
+  conn_hdr->conn_id = ghtonl(conn_id);
+  conn_hdr->seq1 = ghtonl(seq1);
+  conn_hdr->seq2 = ghtonl(seq2);
+  conn_hdr->ts_rel = ghtons(ts_rel); 
+  
+  memcpy(buf + hdrsize, payload, length);
+  if (sendto(sock, buf, length + hdrsize, 0, (struct sockaddr *) remote, sizeof(struct sockaddr_in)) == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    return -1;
+  }
+  IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Sent a message of type %x (payload length = %x)\n", type, length));
+  return 0;
+}
+
+int gp2pp_send_initconn(int sock, int from_ID, int conn_id, int dport, int sip, struct sockaddr_in *remote) {
+  static char buf[GP2PP_MAX_MSGSIZE];
+  gp2pp_initconn_t *initconn = (gp2pp_initconn_t *) buf;
+  initconn->mbz = 0;
+  initconn->conn_id = ghtonl(conn_id);
+  initconn->dport = ghtons(dport);
+  initconn->sip = sip; 
+  return gp2pp_output(sock, GP2PP_MSG_INITCONN, buf, sizeof(gp2pp_initconn_t), from_ID, remote);
 }
 
 /**
@@ -131,7 +204,7 @@ int gp2pp_output(int sock, int type, char *payload, int length, int user_ID, str
 int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in *remote) {
   static char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hello_rep_t *hello_rep = (gp2pp_hello_rep_t *) buf;
-  hello_rep->user_ID = to_ID;
+  hello_rep->user_id = to_ID;
   hello_rep->mbz = 0;
   return gp2pp_output(sock, GP2PP_MSG_HELLO_REP, buf, sizeof(gp2pp_hello_rep_t), from_ID, remote);
 }
@@ -168,7 +241,7 @@ int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payl
  * @return 0 for success, -1 for failure
  */
  
-int gp2pp_register_handler(gp2pp_handtab_t *htab, int msgtype, gp2pp_funptr_t *fun, void *privdata) {
+int gp2pp_register_handler(gp2pp_handtab_t *htab, int msgtype, gp2pp_fun_t *fun, void *privdata) {
   if ((msgtype < 0) || (msgtype >= GP2PP_MSG_NUM)) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
@@ -223,6 +296,70 @@ void* gp2pp_handler_privdata(gp2pp_handtab_t *htab, int msgtype) {
 }
 
 
+/**
+ * Register a handler to be called on incoming messages of type "msgtype".
+ *
+ * @param msgtype The message type for which we define a handler
+ * @param fun Pointer to handler function
+ * @param privdata Pointer to private data (anything you want) that will be supplied to the called function
+ * @return 0 for success, -1 for failure
+ */
+ 
+int gp2pp_register_conn_handler(gp2pp_handtab_t *htab, int msgtype, gp2pp_conn_fun_t *fun, void *privdata) {
+  if ((msgtype < 0) || (msgtype >= GP2PP_CONN_MSG_NUM)) {
+    garena_errno = GARENA_ERR_INVALID;
+    return -1;
+  }
+  
+  if (htab->gp2pp_conn_handlers[msgtype].fun != NULL) {
+    garena_errno = GARENA_ERR_INUSE;
+    return -1;
+  }
+  htab->gp2pp_conn_handlers[msgtype].fun = fun;
+  htab->gp2pp_conn_handlers[msgtype].privdata = privdata;
+  return 0;
+}
+
+/**
+ * Unregisters a handler associated with the specified message type.
+ *
+ * @param msgtype The message type for which we delete the handler
+ * @return 0 for success, -1 for failure
+ */
+int gp2pp_unregister_conn_handler(gp2pp_handtab_t *htab, int msgtype) {
+  if ((msgtype < 0) || (msgtype >= GP2PP_CONN_MSG_NUM)) {
+    garena_errno = GARENA_ERR_INVALID;
+    return -1;
+  }
+  if (htab->gp2pp_conn_handlers[msgtype].fun == NULL) {
+    garena_errno = GARENA_ERR_NOTFOUND;
+    return -1;
+  }
+  htab->gp2pp_conn_handlers[msgtype].fun = NULL;
+  htab->gp2pp_conn_handlers[msgtype].privdata = NULL;  
+  return 0;
+}
+
+
+/**
+ * Get the privdata associated with a handler.
+ *
+ * @param msgtype The message type of the handler we wish to retrieve the privdata
+ * @return The privdata, or NULL if there is an error
+ */
+void* gp2pp_conn_handler_privdata(gp2pp_handtab_t *htab, int msgtype) {
+  if ((msgtype < 0) || (msgtype >= GP2PP_CONN_MSG_NUM)) {
+    garena_errno = GARENA_ERR_INVALID;
+    return NULL;
+  }
+  if (htab->gp2pp_conn_handlers[msgtype].fun == NULL) {
+    garena_errno = GARENA_ERR_NOTFOUND;
+    return NULL;
+  }
+ return htab->gp2pp_conn_handlers[msgtype].privdata;
+}
+
+
 int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port) {
   char buf[32];
   uint32_t *id = (uint32_t*) &buf[1];
@@ -260,4 +397,13 @@ int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port) {
   sendto(sock, buf, 5, 0, (struct sockaddr *) &fsocket, sizeof(fsocket));
   sendto(sock, buf, 5, 0, (struct sockaddr *) &fsocket, sizeof(fsocket));
   
+}
+
+int gp2pp_get_tsnow() {
+  struct timeval tv;
+  if (gettimeofday(&tv, NULL) == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    return -1;
+  }
+  return (tv.tv_usec/GP2PP_CONN_TS_DIVISOR);
 }
