@@ -111,12 +111,14 @@ typedef struct {
   int snd_una, snd_next, rcv_next;
   llist_t sendq;
   llist_t recvq;
-#define GHL_CSTATE_IDLE 0
-#define GHL_CSTATE_LISTEN 1
 #define GHL_CSTATE_ESTABLISHED 2
+#define GHL_CSTATE_CLOSING_IN 3
+#define GHL_CSTATE_CLOSING_OUT 4
   int cstate;
   ghl_ctx_t *ctx;
   ghl_member_t *member;
+  int finseq;
+  int ack_ts;
 } ghl_ch_t;   
 
 typedef struct {
@@ -137,6 +139,10 @@ typedef struct {
   int length;
   char *payload;
 } ghl_conn_recv_t;
+
+typedef struct {
+  ghl_ch_t *ch;
+} ghl_conn_fin_t;
 
 
 
@@ -161,8 +167,8 @@ void ghl_free_timer(ghl_timer_t *timer);
 void ghl_free_ctx(ghl_ctx_t *ctx);
 int ghl_next_timer(struct timeval *tv);
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
-void ghl_conn_close(ghl_ch_t *ch);
-int ghl_conn_send(ghl_ch_t *ch, char *payload, int length);
+void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
+int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, int length);
 ghl_ch_t *ghl_conn_from_id(ghl_ctx_t *ctx, int conn_id);
 
 #endif

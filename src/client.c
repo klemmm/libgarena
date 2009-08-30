@@ -33,8 +33,22 @@
 #define IP_OFFSET3 33
 
 
+typedef struct {
+  int sock;
+  int servsock;
+#define SI_STATE_CONNECTING 0
+#define SI_STATE_ACCEPTING 1
+#define SI_STATE_ESTABLISHED 2
+  int state;
+  ghl_ch_t *ch;
+} sockinfo_t;
+
 char tun_name[IFNAMSIZ];
-int tun_fd;
+char fwdtun_name[IFNAMSIZ];
+int tun_fd, fwdtun_fd;
+
+hash_t ch2sock;
+llist_t socklist;
 
 int routing_host=INADDR_NONE;
 
@@ -179,20 +193,83 @@ int ip_chksum(char *buffer, int length)
 }
 
 
+
+static int set_nonblock(int sock) {
+  int flags;
+  
+  flags = fcntl(sock, F_GETFL, 0);
+  if (flags == -1)
+    return -1;
+  return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+}
+
 int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
-  screen_output(&screen, "Received a connection. \n");
+  int sock;
+  int r;
+  char buf[512];
+  ghl_conn_incoming_t *conn_incoming = event_param;
+  struct sockaddr_in fsocket;
+  sockinfo_t *si;
+  r = -1;
+  sock = socket(PF_INET, SOCK_STREAM, 0);
+  if (sock != -1) {
+    fsocket.sin_family = AF_INET;
+    fsocket.sin_addr.s_addr = inet_addr(FWD_NETWORK) | (conn_incoming->ch->member->virtual_suffix << 24); 
+    fsocket.sin_port = htons(conn_incoming->dport);
+    r = set_nonblock(sock);
+    if (r != -1)
+    r = connect(sock, (struct sockaddr *) &fsocket, sizeof(fsocket));
+    if ((r != -1) || (errno == EINPROGRESS)) {
+      si = malloc(sizeof(sockinfo_t));
+      si->sock = sock;
+      si->servsock = -1;
+      si->state = (r == -1) ? SI_STATE_CONNECTING : SI_STATE_ESTABLISHED;
+      si->ch = conn_incoming->ch;
+      hash_put(ch2sock, conn_incoming->ch, si);
+      llist_add_tail(socklist, si);
+      snprintf(buf,512, "Incoming connection on port %u (acceptation in progress)\n", conn_incoming->dport);
+      screen_output(&screen, buf);
+      return 0;
+    } else {
+      close(sock);
+    }
+  }
+  snprintf(buf,512, "Failed to accept connection on port %u \n", conn_incoming->dport);
+  screen_output(&screen, buf);
+  
+  ghl_conn_close(ctx, conn_incoming->ch);
+  return 0;
+}
+
+int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+  sockinfo_t *si;
+  ghl_conn_fin_t *conn_fin = event_param;
+  ghl_ch_t *ch = conn_fin->ch;
+  screen_output(&screen, "Closed the connection \n");
+  si = hash_get(ch2sock, ch);
+  if (si->sock != -1)
+    close(si->sock);	
+  if (si->servsock != -1)
+    close(si->servsock);
+  hash_del(ch2sock, ch);
+  llist_del_item(socklist, si);
+  free(si);
   return 0;
 }
 
 int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   char *buf;;
   ghl_conn_recv_t *conn_recv = event_param;
-  buf = malloc(conn_recv->length + 1);
+  ghl_ch_t *ch = conn_recv->ch;
+  int sock;
+  sockinfo_t *si;
+  buf = malloc(conn_recv->length);
   memcpy(buf, conn_recv->payload, conn_recv->length);
-  buf[conn_recv->length] = 0;
-  screen_output(&screen, "Received data: ");
-  screen_output(&screen, buf);
-  screen_output(&screen, "\n");
+  si = hash_get(ch2sock, ch);
+  sock = si->sock;
+  if (sock != 0) {
+    write(sock, buf, conn_recv->length);
+  }
   free(buf);
   return 0;
 }
@@ -225,6 +302,8 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
     screen_output(&screen, "\n");
 
     snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.29.%u netmask 255.255.255.0", tun_name, join->rh->me->virtual_suffix);
+    system(cmd);
+    snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.28.%u netmask 255.255.255.0", fwdtun_name, join->rh->me->virtual_suffix);
     system(cmd);
   } else {
     screen_output(&screen, "Room join failed (timeout)\n");
@@ -356,6 +435,145 @@ void l4d_patchpkt(int virtual_suffix, char *buf, int length) {
           }
 }
 
+int tcp_chksum(unsigned char *buffer, int length) {
+  struct pseudo_hdr {  /* rfc 793 tcp pseudo-header */
+         unsigned int saddr, daddr;
+         char mbz;
+         char ptcl;
+         unsigned short tcpl;
+  };
+  char checkbuf[65536];
+
+  struct pseudo_hdr *ph = (void*) (checkbuf + (sizeof(struct ip) - sizeof(struct pseudo_hdr)));
+
+  struct ip ip_backup;
+  struct ip *ip_header = (void*) checkbuf;
+  int sum;
+
+  memset(checkbuf, 0, 65536);
+  memcpy(checkbuf, buffer, length);
+  memcpy(&ip_backup, ip_header, sizeof(struct iphdr));
+  memset(ph, 0, sizeof(struct pseudo_hdr));
+
+ /* fill RFC793 TCP pseudo-header for the checksum */
+  ph->saddr=ip_backup.ip_src.s_addr;
+  ph->daddr=ip_backup.ip_dst.s_addr;
+  ph->mbz=0;
+  ph->ptcl=IPPROTO_TCP;
+  ph->tcpl=htons(length - sizeof(struct iphdr));
+
+  if ((length % 2) != 0)
+    length++;
+  sum = ip_chksum((char*) ph, length - ((char*)ph - (char*) ip_header));
+  memcpy(ip_header, &ip_backup,sizeof(struct iphdr));
+  return(sum);
+}
+
+#define FWDTUN_TO_TUN 0
+#define TUN_TO_FWDTUN 1
+int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
+  struct ip *iph;
+  int r;
+  struct sockaddr_in remote;
+  int remotelen;
+  sockinfo_t *si;
+  ghl_ch_t *ch;
+  int sock;
+  ghl_member_t *cur;
+  ghl_member_t *member;
+  cell_t iter;
+  struct sockaddr_in local;
+  struct tcphdr *tcph;
+  int network_source = (direction == FWDTUN_TO_TUN) ? inet_addr(FWD_NETWORK) : inet_addr(GARENA_NETWORK);
+  int network_dest = (direction == FWDTUN_TO_TUN) ? inet_addr(GARENA_NETWORK) : inet_addr(FWD_NETWORK);
+    
+  if (size < (sizeof(struct ip) + sizeof(struct tcphdr)))
+    return 0;
+  iph = (struct ip *) buf;
+  tcph = (struct tcphdr *) (buf + sizeof(struct ip));
+  if (iph->ip_p != IPPROTO_TCP)
+    return 0;
+
+  if ((direction == TUN_TO_FWDTUN) && (routing_host != INADDR_NONE)) {
+    if (iph->ip_src.s_addr != routing_host)
+      return 0;
+  } else {
+    if (iph->ip_src.s_addr != ((rh->me->virtual_suffix << 24) | network_source))
+      return 0;
+  }
+    
+  if ((iph->ip_dst.s_addr & 0xFFFFFF) != network_source)
+    return 0;
+  
+  iph->ip_src.s_addr = (iph->ip_dst.s_addr & 0xFF000000) | network_dest;
+  if ((direction == FWDTUN_TO_TUN) && (routing_host != INADDR_NONE)) {
+    iph->ip_dst.s_addr = routing_host;
+  } else iph->ip_dst.s_addr = ((rh->me->virtual_suffix << 24) | network_dest);
+
+  iph->ip_sum = 0;
+  iph->ip_sum = ip_chksum((char*) buf, sizeof(struct ip));
+  tcph->check = 0;
+  tcph->check = tcp_chksum(buf, size);
+  if ((direction == TUN_TO_FWDTUN) && (tcph->syn) && (!tcph->ack) && ((sock = socket(PF_INET, SOCK_STREAM, 0)) != -1)) {
+    member = NULL;
+    for (iter = llist_iter(rh->members) ; iter ; iter = llist_next(iter)) {
+      cur = llist_val(iter);
+      if (cur->virtual_suffix == (iph->ip_src.s_addr >> 24)) {
+        member = cur;
+        break;
+      }
+    }
+    if (member == NULL) {
+      return 0;
+    }
+
+    local.sin_family = PF_INET;
+    local.sin_port = tcph->dest;
+    local.sin_addr.s_addr = network_dest | (rh->me->virtual_suffix << 24);
+    if ((bind(sock, (struct sockaddr *)&local, sizeof(local)) != -1) && (listen(sock,5) != -1)) {
+      set_nonblock(sock);
+      remotelen = sizeof(remote);
+      r = accept(sock, (struct sockaddr *) &remote, &remotelen);
+      
+      if ((r != -1) || (errno == EWOULDBLOCK)) {
+        si = malloc(sizeof(sockinfo_t));
+        si->sock = r;
+        si->state = (r == -1) ? SI_STATE_ACCEPTING : SI_STATE_ESTABLISHED;
+        si->servsock = sock;
+        if (r != -1) {
+          close(si->servsock);
+          si->servsock = -1;
+        }
+  
+        si->ch = ghl_conn_connect(rh->ctx, member, htons(tcph->dest));
+        if (si->ch != NULL) {
+          hash_put(ch2sock, si->ch, si);
+          llist_add_tail(socklist, si);
+          return 1;
+        }
+        free(si);
+        if (r != -1)
+          close(r);
+      }
+    } 
+    close(sock);
+    return 0;
+    
+  }
+  return 1;  
+}
+
+void handle_fwd_tunnel(ghl_rh_t *rh) {
+  char buf[65536];
+  int r;
+  if ((r = read(fwdtun_fd, buf, sizeof(buf))) <= 0)
+    return;
+
+  if (mangle_packet(rh, buf, r, FWDTUN_TO_TUN))
+    write(tun_fd, buf, r);
+}
+
+
 void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   char buf[65536];
   struct ip *iph;
@@ -368,6 +586,11 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   int r;
   if ((r = read(tun_fd, buf, sizeof(buf))) <= 0)
     return;
+  if (mangle_packet(rh, buf, r, TUN_TO_FWDTUN)) {
+    write(fwdtun_fd, buf, r);
+    return;
+  }
+  
   if (r < (sizeof(struct ip) + sizeof(struct udphdr)))
     return;
   iph = (struct ip*) buf;
@@ -454,6 +677,7 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
 
   ghl_register_handler(ctx, GHL_EV_CONN_INCOMING, handle_conn_incoming, NULL);
   ghl_register_handler(ctx, GHL_EV_CONN_RECV, handle_conn_recv, NULL);
+  ghl_register_handler(ctx, GHL_EV_CONN_FIN, handle_conn_fin, NULL);
   return 0;
 }
 
@@ -653,35 +877,89 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 }
 
 
+int faispaschier = 0;
+
+void kaka(void) {
+  if (!faispaschier)
+    abort();
+}
+
 int main(int argc, char **argv) {
-  fd_set fds;
-  char buf[512];
+  fd_set fds, wfds;
+  char buf[4096];
+  struct sockaddr_in dummy;
+  int dummy_size;
+  int tunmax;
   struct timeval tv;
   int r;
+  ghl_ch_t *ch;
+  cell_t iter;
+  sockinfo_t *si;
   int input = 0;
+  atexit(kaka);
+  
   if (argc != 2) {
     printf("usage: %s <tunnel interface to use>\n", argv[0]);
+    faispaschier = 1;
     exit(-1);
   }
   strncpy(tun_name, argv[1], IFNAMSIZ);
+  snprintf(fwdtun_name, IFNAMSIZ, "%s-ctrl", argv[1]);
   tun_fd = tun_alloc(tun_name);
   if (tun_fd == -1) {
+    faispaschier = 1;
     perror("tun_alloc");
+    exit(-1);
+  }
+  fwdtun_fd = tun_alloc(fwdtun_name);
+  if (fwdtun_fd == -1) {
+    faispaschier = 1;
+    perror("fwdtun_alloc");
     exit(-1);
   }
   garena_init();
   
   screen_init(&screen);
 
+  ch2sock = hash_init();
+  socklist = llist_alloc();
+  
   while(!quit) {
     FD_ZERO(&fds);
+    FD_ZERO(&wfds);
     r = ctx ? ghl_fill_fds(ctx, &fds) : 0;
     FD_SET(tun_fd, &fds);
+    FD_SET(fwdtun_fd, &fds);
+    tunmax = MAX(tun_fd, fwdtun_fd);
     FD_SET(0, &fds);
+    if (ctx)
+      for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+        ch = llist_val(iter);
+        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
+          si = hash_get(ch2sock, ch);
+          if (si->state == SI_STATE_CONNECTING) {
+            FD_SET(si->sock, &wfds);
+            if (si->sock > r)
+              r = si->sock;
+
+          } else if (si->state == SI_STATE_ESTABLISHED) {
+            FD_SET(si->sock, &fds);
+            if (si->sock > r)
+              r = si->sock;
+
+          } else if (si->state == SI_STATE_ACCEPTING) {
+            FD_SET(si->servsock, &fds);
+            if (si->servsock > r)
+              r = si->servsock;
+
+          }
+        }
+      }
+    
     if (ghl_next_timer(&tv)) {
-      r = select(MAX(r,tun_fd)+1, &fds, NULL, NULL, &tv);
+      r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, &tv);
     } else {
-      r = select(MAX(r,tun_fd)+1, &fds, NULL, NULL, NULL);
+      r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, NULL);
     }
 
     if (r == -1) {
@@ -704,6 +982,72 @@ int main(int argc, char **argv) {
     if (FD_ISSET(tun_fd, &fds)) {
       handle_tunnel(ctx, rh);
     }
+    if (FD_ISSET(fwdtun_fd, &fds)) {
+      handle_fwd_tunnel(rh);
+    }
+    
+    if (ctx)
+      for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+        ch = llist_val(iter);
+        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
+          si = hash_get(ch2sock, ch);
+          if (si->state == SI_STATE_ACCEPTING) {
+            if (FD_ISSET(si->servsock, &fds)) {
+              dummy_size = sizeof(dummy);
+              if ((r = accept(si->servsock, (struct sockaddr *)&dummy, &dummy_size)) == -1) {
+                /* the accept failed */
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+                free(si);
+              } else {
+                si->sock = r;
+                si->state = SI_STATE_ESTABLISHED;
+                if (si->servsock != -1)
+                  close(si->servsock);
+              }
+            }
+          } else if (si->state == SI_STATE_CONNECTING) {
+            if (FD_ISSET(si->sock, &wfds)) {
+              dummy_size = sizeof(dummy);
+              if (getpeername(si->sock, (struct sockaddr *)&dummy, &dummy_size) == -1) {
+                /* close */
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+                free(si);
+              } else {
+                /* ok */
+                si->state = SI_STATE_ESTABLISHED;
+              }
+            }
+          } else if (si->state == SI_STATE_ESTABLISHED) {
+            if (FD_ISSET(si->sock, &fds)) {
+              r = read(si->sock, buf, sizeof(buf));
+              if (r > 0) {
+                ghl_conn_send(ctx, ch, buf, r);
+              } else {
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+                free(si);
+              }
+            }
+          }
+        }
+      }
     if (ctx) 
       ghl_process(ctx, &fds);
 
@@ -712,5 +1056,6 @@ int main(int argc, char **argv) {
   endwin();
   ghl_free_ctx(ctx);  
   printf("bye...\n");
+  faispaschier = 1;
   return 0;
 }

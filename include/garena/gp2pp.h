@@ -10,10 +10,16 @@
 
 
 #define GP2PP_PORT 1513
+#define GP2PP_MAX_SENDQ 65536
+#define GP2PP_MAX_IN_TRANSIT 1024
+
+#define GP2PP_MAGIC_LOCALIP (inet_addr("127.0.0.1"))
 
 #define GP2PP_CONN_TS_DIVISOR 256
 #define GP2PP_HELLO_INTERVAL 30
 #define GP2PP_CONN_RETRANS_INTERVAL 10
+#define GP2PP_CLOSE_WAIT 10
+#define GP2PP_CONN_TIMEOUT (GP2PP_CONN_RETRANS_INTERVAL << 2)
 
 #define GP2PP_MAX_MSGSIZE 65536
 
@@ -52,8 +58,8 @@ typedef struct gp2pp_conn_hdr_s gp2pp_conn_hdr_t;
 
 struct gp2pp_initconn_s {
   uint32_t conn_id;
-  uint16_t dport; /* !!! LITTLE ENDIAN !!! */
   uint32_t sip; /* always set to 127.0.0.1 apparently */
+  uint16_t dport; /* !!! LITTLE ENDIAN !!! */
   uint16_t mbz;
 } __attribute__ ((packed));
 typedef struct gp2pp_initconn_s gp2pp_initconn_t;

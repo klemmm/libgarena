@@ -13,6 +13,8 @@
 static llist_t timers;
 static int ghl_free_room(ghl_rh_t *rh);
 static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt);
+static void conn_free(ghl_ch_t *ch);
+void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt);
 
 static int send_hello_to_all(ghl_ctx_t *ctx) {
   cell_t iter, iter2;
@@ -38,6 +40,35 @@ static int send_hello_to_all(ghl_ctx_t *ctx) {
 
 static int do_conn_retrans(void *privdata) {
   ghl_ctx_t *ctx = privdata;
+  cell_t iter2;
+  cell_t iter;
+  ghl_ch_t *ch;
+  ghl_ch_pkt_t *pkt;
+  cell_t itere2;
+  int retrans;
+  for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+    ch = llist_val(iter);
+    for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
+      pkt = llist_val(iter2);
+      if ((ch->snd_una + GP2PP_MAX_IN_TRANSIT) < pkt->seq) {
+        fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
+        fflush(deb);
+        break;
+      }
+      xmit_packet(ctx, pkt);
+      retrans++;
+    }
+    if (llist_is_empty(ch->sendq) &&  (ch->cstate == GHL_CSTATE_CLOSING_OUT)) {
+      llist_del_item(ctx->conns, ch);
+      conn_free(ch);
+      continue;
+    }
+    if (!llist_is_empty(ch->sendq) && ((ch->ack_ts + GP2PP_CONN_TIMEOUT) < time(NULL))) {
+     fprintf(deb, "[GHL] Connection ID %x with user %u timed out.\n", ch->conn_id, ch->member->name);
+     llist_del_item(ctx->conns, ch);
+     conn_free(ch);
+    }
+  }
   ctx->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_INTERVAL, do_conn_retrans, privdata);
 }
 
@@ -85,6 +116,7 @@ static int handle_initconn_msg(int type, void *payload, int length, void *privda
   conn_incoming_ev.ch->recvq = llist_alloc();
   conn_incoming_ev.ch->snd_una = 0;
   conn_incoming_ev.ch->ctx = ctx;
+  conn_incoming_ev.ch->ack_ts = time(NULL);
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
@@ -99,20 +131,30 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
   int seq;
   cell_t iter;
   ghl_conn_recv_t conn_recv_ev;
+  ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
   ghl_ch_pkt_t *old = NULL;
   
   if (llist_is_empty(ch->recvq))
     return;
- 
+   
   for (seq = ch->rcv_next, iter = llist_iter(ch->recvq); iter; iter = llist_next(iter), seq++) {
     pkt = llist_val(iter);
     if (pkt->seq != seq)
       break;
-      conn_recv_ev.ch = ch;
-      conn_recv_ev.payload = pkt->payload;
-      conn_recv_ev.length = pkt->length;
-      ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+      if (pkt->length > 0) {
+        conn_recv_ev.ch = ch;
+        conn_recv_ev.payload = pkt->payload;
+        conn_recv_ev.length = pkt->length;
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT)
+          ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+      } else {
+        conn_fin_ev.ch = ch;
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+          ch->cstate = GHL_CSTATE_CLOSING_OUT;
+          ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
+        }
+      }
       if (old) {
         llist_del_item(ch->recvq, old);
         free(old->payload);
@@ -129,10 +171,76 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
 
 }
 
+static int handle_conn_fin_msg(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) { 
+  ghl_ctx_t *ctx = privdata;
+  ghl_ch_pkt_t *pkt;
+  ghl_ch_t *ch = ghl_conn_from_id(ctx, conn_id);
+  if (ch == NULL) {
+    fprintf(deb, "Alien conn: %x\n", conn_id);
+    fflush(deb);
+    garena_errno = GARENA_ERR_PROTOCOL;
+    return -1;
+  }
+  if ((ch->cstate == GHL_CSTATE_CLOSING_OUT) || (ch->cstate == GHL_CSTATE_CLOSING_IN))
+    return 0;
+
+  pkt = malloc(sizeof(ghl_ch_pkt_t));
+  pkt->length = 0;
+  pkt->payload = NULL;
+  pkt->seq = ch->rcv_next; /* wtf is this crappy protocol, the FIN packet does not have a sequence number */
+  pkt->ts_rel = ts_rel;
+  pkt->ch = ch;
+  insert_pkt(ch->recvq, pkt);
+  try_deliver(ctx, ch);
+  ch->cstate = GHL_CSTATE_CLOSING_IN;
+  ch->finseq = seq1;
+  return 0;
+}
+
+static int handle_conn_ack_msg(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
+  ghl_ctx_t *ctx = privdata;
+  ghl_ch_t *ch = ghl_conn_from_id(ctx, conn_id);
+  cell_t iter;
+  ghl_ch_pkt_t *pkt;
+  ghl_ch_pkt_t *todel = NULL;
+  if (ch == NULL) {
+    fprintf(deb, "Alien conn: %x\n", conn_id);
+    fflush(deb);
+    garena_errno = GARENA_ERR_PROTOCOL;
+    return -1;
+  }
+  if ((seq2 - ch->snd_una) > 0) {
+    ch->snd_una = seq2;
+  } else {
+    fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
+  }
+
+  for (iter=llist_iter(ch->sendq); iter; iter = llist_next(iter)) {
+    if (todel != NULL) { 
+      llist_del_item(ch->sendq, todel); 
+      free(todel);
+      todel = NULL;
+    }
+    pkt = llist_val(iter);
+    if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
+      ch->ack_ts = time(NULL);
+      todel = pkt;
+    }
+  }
+  if (todel != NULL) {
+      llist_del_item(ch->sendq, todel);
+      free(todel);
+      todel = NULL;
+  }
+
+}
+
 static int handle_conn_data_msg(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
   ghl_ctx_t *ctx = privdata;
   ghl_ch_t *ch = ghl_conn_from_id(ctx, conn_id);
   ghl_ch_pkt_t *pkt;
+  cell_t iter;
+  ghl_ch_pkt_t *todel = NULL;
     
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -140,7 +248,39 @@ static int handle_conn_data_msg(int subtype, void *payload, int length, void *pr
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
+  if (length == 0) {
+    return 0;
+  }
+    
+  if (ch->cstate == GHL_CSTATE_CLOSING_OUT)
+    return 0;
+  if ((seq2 - ch->snd_una) > 0) {
+    ch->snd_una = seq2;
+  } else {
+    fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
+  }
 
+  for (iter=llist_iter(ch->sendq); iter; iter = llist_next(iter)) {
+    if (todel != NULL) { 
+      llist_del_item(ch->sendq, todel); 
+      free(todel);
+      todel = NULL;
+    }
+    pkt = llist_val(iter);
+    if ((ch->snd_una - pkt->seq) >= 1) {
+      ch->ack_ts = time(NULL);
+      todel = pkt;
+    }
+  }
+  if (todel != NULL) {
+      llist_del_item(ch->sendq, todel);
+      free(todel);
+      todel = NULL;
+  }
+
+  if ((ch->cstate == GHL_CSTATE_CLOSING_IN) && ((seq1 - ch->finseq) > 0)) {
+    return 0;
+  }
   fprintf(deb, "Received CONN DATA message from %s:%u\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port));
   fflush(deb);
   
@@ -151,8 +291,12 @@ static int handle_conn_data_msg(int subtype, void *payload, int length, void *pr
   pkt->ts_rel = ts_rel;
   pkt->ch = ch;
   memcpy(pkt->payload, payload, length);
-  insert_pkt(ch->recvq, pkt);
-  try_deliver(ctx, ch);
+  if ((seq1 - ch->rcv_next) >= 0) {
+    insert_pkt(ch->recvq, pkt);
+    try_deliver(ctx, ch);
+  }
+  
+  remote->sin_port = ch->member->external_port;
   gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, ctx->my_id, conn_id, seq1, ch->rcv_next, 0, remote);
   
   return 0;
@@ -496,6 +640,10 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int
   /* GP2PP CONN handlers */
 
   if (gp2pp_register_conn_handler(ctx->gp2pp_htab, GP2PP_CONN_MSG_DATA, handle_conn_data_msg, ctx) == -1)
+    goto err;
+  if (gp2pp_register_conn_handler(ctx->gp2pp_htab, GP2PP_CONN_MSG_FIN, handle_conn_fin_msg, ctx) == -1)
+    goto err;
+  if (gp2pp_register_conn_handler(ctx->gp2pp_htab, GP2PP_CONN_MSG_ACK, handle_conn_ack_msg, ctx) == -1)
     goto err;
 
   /* timers handlers */
@@ -918,23 +1066,105 @@ void ghl_free_ctx(ghl_ctx_t *ctx) {
 
 
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
+  struct sockaddr_in remote;
+  ghl_ch_t *ch;
+  int i;
+  
+  ch = malloc(sizeof(ghl_ch_t));
+  if (ch == NULL) {
+    garena_errno = GARENA_ERR_NORESOURCE;
+    return NULL;
+  }
+  
+  ch->cstate = GHL_CSTATE_ESTABLISHED;
+  ch->member = member;
+  ch->ts_base = gp2pp_get_tsnow();
+  ch->sendq = llist_alloc();
+  ch->recvq = llist_alloc();
+  ch->ctx = ctx;
+  ch->ack_ts = time(NULL);
+  ch->snd_una = 0;
+  ch->snd_next = 0;
+  ch->rcv_next = 0;
+  ch->conn_id = gp2pp_new_conn_id();
+  llist_add_head(ctx->conns, ch);
+  
+
+  remote.sin_family = AF_INET;
+  remote.sin_addr = ch->member->external_ip;
+  remote.sin_port = ch->member->external_port;
+  if (gp2pp_send_initconn(ctx->peersock, ctx->my_id, ch->conn_id, port, GP2PP_MAGIC_LOCALIP, &remote) == -1) {
+    llist_free(ch->sendq);
+    llist_free(ch->recvq);
+    llist_del_item(ctx->conns, ch);
+    free(ch);
+    return NULL;
+  } else return ch;
+}
+
+static void conn_free(ghl_ch_t *ch) {
+  cell_t iter;
+  ghl_ch_pkt_t *pkt;
+  for (iter = llist_iter(ch->sendq); iter; iter = llist_next(iter)) {
+    pkt = llist_val(iter);
+    free(pkt->payload);
+  }
+  for (iter = llist_iter(ch->recvq); iter; iter = llist_next(iter)) {
+    pkt = llist_val(iter);
+    free(pkt->payload);
+  }
+  llist_free_val(ch->sendq);
+  llist_free_val(ch->recvq);
+  free(ch);
 }
 
 
-void ghl_conn_close(ghl_ch_t *ch) {
+void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch) {
+  struct sockaddr_in remote;
+  int i;
+  if (ch->cstate == GHL_CSTATE_CLOSING_OUT)
+    return;
+  remote.sin_family = AF_INET;
+  remote.sin_addr = ch->member->external_ip;
+  remote.sin_port = ch->member->external_port;
+  for (i = 0; i < 4; i++) 
+    gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_FIN, NULL, 0, ctx->my_id, ch->conn_id, ch->rcv_next, ch->rcv_next, 0, &remote);
+  ch->cstate = GHL_CSTATE_CLOSING_OUT;
+
 }
 
-int ghl_conn_send(ghl_ch_t *ch, char *payload, int length) {
+void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt) {
+  struct sockaddr_in remote;
+  remote.sin_family = AF_INET;
+  remote.sin_addr = pkt->ch->member->external_ip;
+  remote.sin_port = pkt->ch->member->external_port;
+  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_DATA, pkt->payload, pkt->length, ctx->my_id, pkt->ch->conn_id, pkt->seq, pkt->ch->rcv_next, pkt->ts_rel, &remote);
+}
+
+
+int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, int length) {
   ghl_ch_pkt_t *pkt;
   int now = gp2pp_get_tsnow();
+  if (ch->cstate == GHL_CSTATE_CLOSING_OUT) {
+    garena_errno = GARENA_ERR_INVALID;
+    return -1;
+  }
+  
+  if ((ch->snd_next - ch->snd_una) >= GP2PP_MAX_SENDQ) {
+    garena_errno = GARENA_ERR_AGAIN;
+    return -1;
+  }
+  
   pkt = malloc(sizeof(ghl_ch_pkt_t));
   pkt->length = length;
   pkt->payload = malloc(length);
   pkt->seq = ch->snd_next;
   pkt->ts_rel = (now - ch->ts_base);
   pkt->ch = ch;
+  memcpy(pkt->payload, payload, length);
   
   ch->snd_next++;
   ch->ts_base = now;
-  
+  insert_pkt(ch->sendq, pkt);
+  xmit_packet(ctx, pkt);
 }

@@ -12,6 +12,19 @@ struct llist_s {
   struct cell_s *head;
 };  
 
+struct hashitem_s {
+  hash_keytype key;
+  void *value;
+  struct hashitem_s *next;
+};
+
+struct hash_s {
+  unsigned int size;
+  struct hashitem_s **h;
+};
+
+
+
 int llist_is_empty(llist_t desc) {
   return(desc->head == NULL);
 } 
@@ -188,3 +201,108 @@ void llist_empty_val(llist_t desc) {
   desc->head = NULL;
 }  
 
+static unsigned int hash_func(hash_keytype id) {
+ char *buf = (char*) &id;
+ int i;
+ int res = 0;
+ for (i = 0; i < sizeof(hash_keytype); i++)
+ {
+   res = res ^ buf[i];
+ }
+ return(res);
+} 
+
+int hash_num(hash_t hash) {
+  hashitem_t item;
+  int i;
+  int num = 0;
+  
+  for (i = 0; i < hash->size; i++) {
+    for (item = hash->h[i]; item != NULL; item = item->next)
+      num++;
+  }
+  return num;
+  
+}  
+
+int hash_put(hash_t hash, hash_keytype key, void *value) {
+  hashitem_t item;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  item = malloc(sizeof(struct hashitem_s));
+  if (item == NULL) {
+    return -1;
+  }
+   
+  item->key = key;
+  item->value = value;
+
+  item->next = hash->h[hv];
+  hash->h[hv] = item;
+
+  return 0;
+}
+
+void *hash_get(hash_t hash, hash_keytype key) {
+  hashitem_t item;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  for (item = hash->h[hv]; item != NULL; item = item->next) {
+    if (key == item->key)
+      return item->value;
+  }
+   
+  return NULL;
+}
+
+int hash_del(hash_t hash, hash_keytype key) {
+  hashitem_t item, *prev;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  prev = &hash->h[hv];
+  item = NULL;
+  for (item = hash->h[hv]; item != NULL; item = item->next) {
+    if (key == item->key)
+    {
+      *prev = item->next;
+      free(item);
+      return 0;  
+    } else prev = &item->next;
+  }
+   
+  return -1;
+}
+
+void hash_free(hash_t hash) {
+  int i;
+  hashitem_t item,old;
+  
+  for (i = 0 ; i < hash->size; i++) {
+    item = hash->h[i];
+    while(item != NULL) {
+      old = item;
+      item = item->next;
+      free(old->value); 
+      free(old);
+    }
+  }  
+  free(hash->h);
+  free(hash);   
+}
+
+hash_t hash_init() {
+  hash_t hash;
+  int size = HASH_SIZE;
+  
+  hash = malloc(sizeof(struct hash_s));
+  if(hash == NULL)
+    return  NULL; 
+  hash->h = malloc(size * sizeof(struct hashitem_s*));
+  if (hash->h == NULL) {
+    free(hash);
+    return (NULL);
+  }
+  hash->size = size;
+  memset(hash->h, 0, size*sizeof(struct hashitem_s*));
+  return(hash);
+}

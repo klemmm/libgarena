@@ -399,6 +399,13 @@ int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port) {
   
 }
 
+int gp2pp_new_conn_id(void) {
+  static uint16_t current_id = 0;
+  uint32_t result = ((current_id + 1) << 16) | current_id;
+  current_id += 2;
+  return result;
+}
+
 int gp2pp_get_tsnow() {
   struct timeval tv;
   if (gettimeofday(&tv, NULL) == -1) {

@@ -7,8 +7,13 @@
  #define IFDEBUG(x)
 #endif
 
+#define HASH_SIZE 256
+
 typedef struct llist_s *llist_t;
 typedef struct cell_s *cell_t;
+typedef struct hash_s *hash_t;
+typedef struct hashitem_s *hashitem_t;
+typedef void *hash_keytype;
 
 int llist_is_empty(llist_t desc);
 llist_t llist_alloc(void);
@@ -26,5 +31,11 @@ void *llist_val(cell_t cell);
 void llist_del_item(llist_t desc, void *val);
 int llist_add_before(llist_t desc, void *to_compare, void *to_add);
   
+int hash_num(hash_t hash);
+int hash_put(hash_t hash, hash_keytype key, void *value);
+void *hash_get(hash_t hash, hash_keytype key);
+int hash_del(hash_t hash, hash_keytype key);
+void hash_free(hash_t hash);
+hash_t hash_init();
 
 #endif
