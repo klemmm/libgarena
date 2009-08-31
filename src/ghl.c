@@ -14,7 +14,8 @@ static llist_t timers;
 static int ghl_free_room(ghl_rh_t *rh);
 static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt);
 static void conn_free(ghl_ch_t *ch);
-void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt);
+static void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt);
+static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam);
 
 static int send_hello_to_all(ghl_ctx_t *ctx) {
   cell_t iter, iter2;
@@ -43,10 +44,18 @@ static int do_conn_retrans(void *privdata) {
   cell_t iter2;
   cell_t iter;
   ghl_ch_t *ch;
+  ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
+  ghl_ch_t *todel = NULL;
   cell_t itere2;
   int retrans;
   for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+    if (todel) {
+      llist_del_item(ctx->conns, todel);
+      conn_free(todel);
+      todel = NULL;
+    }
+
     ch = llist_val(iter);
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
@@ -59,16 +68,25 @@ static int do_conn_retrans(void *privdata) {
       retrans++;
     }
     if (llist_is_empty(ch->sendq) &&  (ch->cstate == GHL_CSTATE_CLOSING_OUT)) {
-      llist_del_item(ctx->conns, ch);
-      conn_free(ch);
+      todel = ch;
       continue;
     }
     if (!llist_is_empty(ch->sendq) && ((ch->ack_ts + GP2PP_CONN_TIMEOUT) < time(NULL))) {
-     fprintf(deb, "[GHL] Connection ID %x with user %u timed out.\n", ch->conn_id, ch->member->name);
-     llist_del_item(ctx->conns, ch);
-     conn_free(ch);
+     fprintf(deb, "[GHL] Connection ID %x with user %s timed out.\n", ch->conn_id, ch->member->name);
+     todel = ch;
+     if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+       conn_fin_ev.ch = ch;
+       ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
+     }
     }
   }
+  
+  if (todel) {
+    llist_del_item(ctx->conns, todel);
+    conn_free(todel);
+    todel = NULL;
+  }
+
   ctx->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_INTERVAL, do_conn_retrans, privdata);
 }
 
@@ -256,9 +274,7 @@ static int handle_conn_data_msg(int subtype, void *payload, int length, void *pr
     return 0;
   if ((seq2 - ch->snd_una) > 0) {
     ch->snd_una = seq2;
-  } else {
-    fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
-  }
+  } 
 
   for (iter=llist_iter(ch->sendq); iter; iter = llist_next(iter)) {
     if (todel != NULL) { 
@@ -458,6 +474,10 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
   gcrp_member_t *member;
   ghl_talk_t talk_ev;
   ghl_part_t part_ev;
+  cell_t iter;
+  ghl_conn_fin_t conn_fin_ev;
+  ghl_ch_t *todel;
+  ghl_ch_t *conn;
   ghl_join_t join_ev;
   ghl_togglevpn_t togglevpn_ev;
   struct sockaddr_in remote;
@@ -539,6 +559,29 @@ static int handle_room_activity(int type, void *payload, int length, void *privd
       part_ev.rh = rh;
       ghl_signal_event(ctx, GHL_EV_PART, &part_ev);
       llist_del_item(rh->members, member);
+      todel = NULL;
+      for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+        if (todel) {
+          llist_del_item(ctx->conns, conn);
+          conn_free(conn);
+          todel = NULL;
+        }
+
+        conn = llist_val(iter);
+        if (conn->member == member) {
+           if (conn->cstate != GHL_CSTATE_CLOSING_OUT) {
+             conn_fin_ev.ch = conn;
+             ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
+           }
+           todel = conn;
+        }
+      }
+      if (todel) {
+        llist_del_item(ctx->conns, conn);
+        conn_free(conn);
+        todel = NULL;
+      }
+      
       free(member);
       break;
     default:  
@@ -721,6 +764,7 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id)
   rh->got_welcome = 0;
   rh->got_members = 0;
   llist_add_head(ctx->rooms, rh);
+  fflush(deb);
   rh->timeout = ghl_new_timer(time(NULL) + GHL_JOIN_WAIT, handle_room_join_timeout, rh);
   return(rh);
 }
@@ -854,7 +898,7 @@ int ghl_next_timer(struct timeval *tv) {
   tv->tv_usec = 0;
   next = llist_head(timers);
   if (next) {
-    tv->tv_sec = (next->when) - now;
+    tv->tv_sec = (next->when > now) ? ((next->when) - now) : 0;
     return 1;
   }
   return 0;
@@ -1133,7 +1177,7 @@ void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch) {
 
 }
 
-void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt) {
+static void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt) {
   struct sockaddr_in remote;
   remote.sin_family = AF_INET;
   remote.sin_addr = pkt->ch->member->external_ip;

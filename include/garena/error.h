@@ -16,6 +16,8 @@ extern long garena_errno;
 #define GARENA_ERR_NOTFOUND -7
 #define GARENA_ERR_PROTOCOL -8
 #define GARENA_ERR_NORESOURCE -9
+char *garena_strerror();
+void garena_perror(char *msg);
 
 
 #endif

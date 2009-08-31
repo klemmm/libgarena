@@ -27,6 +27,8 @@
 #include <garena/util.h>
 
 
+#define MAP(p) ((p) ^ 0xDEAD)
+
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 #define IP_OFFSET1 0x7D
 #define IP_OFFSET2 29
@@ -226,16 +228,15 @@ int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *pri
       si->state = (r == -1) ? SI_STATE_CONNECTING : SI_STATE_ESTABLISHED;
       si->ch = conn_incoming->ch;
       hash_put(ch2sock, conn_incoming->ch, si);
+      fprintf(deb,"Adding SI for: %x (connect)\n", si->ch->conn_id);
+      fflush(deb);
+      
       llist_add_tail(socklist, si);
-      snprintf(buf,512, "Incoming connection on port %u (acceptation in progress)\n", conn_incoming->dport);
-      screen_output(&screen, buf);
       return 0;
     } else {
       close(sock);
     }
   }
-  snprintf(buf,512, "Failed to accept connection on port %u \n", conn_incoming->dport);
-  screen_output(&screen, buf);
   
   ghl_conn_close(ctx, conn_incoming->ch);
   return 0;
@@ -245,14 +246,17 @@ int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
   sockinfo_t *si;
   ghl_conn_fin_t *conn_fin = event_param;
   ghl_ch_t *ch = conn_fin->ch;
-  screen_output(&screen, "Closed the connection \n");
   si = hash_get(ch2sock, ch);
+  fprintf(deb, "Received FIN for conn %x\n", ch->conn_id);
+  fflush(deb);
   if (si->sock != -1)
     close(si->sock);	
   if (si->servsock != -1)
     close(si->servsock);
   hash_del(ch2sock, ch);
   llist_del_item(socklist, si);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
   free(si);
   return 0;
 }
@@ -477,6 +481,7 @@ int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
   struct sockaddr_in remote;
   int remotelen;
   sockinfo_t *si;
+  int optval;
   ghl_ch_t *ch;
   int sock;
   ghl_member_t *cur;
@@ -510,6 +515,11 @@ int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
     iph->ip_dst.s_addr = routing_host;
   } else iph->ip_dst.s_addr = ((rh->me->virtual_suffix << 24) | network_dest);
 
+  if (direction == FWDTUN_TO_TUN) {
+    tcph->source = MAP(tcph->source);
+  } else {
+    tcph->dest = MAP(tcph->dest);
+  }
   iph->ip_sum = 0;
   iph->ip_sum = ip_chksum((char*) buf, sizeof(struct ip));
   tcph->check = 0;
@@ -530,6 +540,9 @@ int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
     local.sin_family = PF_INET;
     local.sin_port = tcph->dest;
     local.sin_addr.s_addr = network_dest | (rh->me->virtual_suffix << 24);
+    optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
     if ((bind(sock, (struct sockaddr *)&local, sizeof(local)) != -1) && (listen(sock,5) != -1)) {
       set_nonblock(sock);
       remotelen = sizeof(remote);
@@ -545,12 +558,18 @@ int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
           si->servsock = -1;
         }
   
-        si->ch = ghl_conn_connect(rh->ctx, member, htons(tcph->dest));
+        si->ch = ghl_conn_connect(rh->ctx, member, htons(MAP(tcph->dest)));
         if (si->ch != NULL) {
           hash_put(ch2sock, si->ch, si);
+      fprintf(deb,"Adding SI for: %x (accept)\n", si->ch->conn_id);
+      fflush(deb);
+          
           llist_add_tail(socklist, si);
           return 1;
         }
+        fprintf(deb, "freeing SI associated w/ no conn\n");
+        fflush(deb);
+
         free(si);
         if (r != -1)
           close(r);
@@ -703,6 +722,11 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
   if (serv_ip == INADDR_NONE)
     serv_ip = atoi(parv[1]);
   rh = ghl_join_room(ctx, serv_ip, 8687, atoi(parv[2]));
+  if (rh == NULL) {
+    screen_output(screen, "error\n");
+    screen_output(screen, garena_strerror());
+    return -1;
+  }
   return 0;
 }
 
@@ -996,6 +1020,9 @@ int main(int argc, char **argv) {
               dummy_size = sizeof(dummy);
               if ((r = accept(si->servsock, (struct sockaddr *)&dummy, &dummy_size)) == -1) {
                 /* the accept failed */
+  fprintf(deb, "freeing SI because the accept failed, connid:  %x\n", ch->conn_id);
+  fflush(deb);
+                
                 ghl_conn_close(ctx, ch);
                 if (si->sock != -1)
                   close(si->sock);
@@ -1003,12 +1030,17 @@ int main(int argc, char **argv) {
                   close(si->servsock);
                 llist_del_item(socklist, si);
                 hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+                
                 free(si);
               } else {
                 si->sock = r;
                 si->state = SI_STATE_ESTABLISHED;
-                if (si->servsock != -1)
+                if (si->servsock != -1) {
                   close(si->servsock);
+                  si->servsock = -1;
+                }
               }
             }
           } else if (si->state == SI_STATE_CONNECTING) {
@@ -1016,6 +1048,8 @@ int main(int argc, char **argv) {
               dummy_size = sizeof(dummy);
               if (getpeername(si->sock, (struct sockaddr *)&dummy, &dummy_size) == -1) {
                 /* close */
+                fprintf(deb, "freeing SI because the connect failed,: %x\n", si->ch->conn_id);
+                fflush(deb);
                 ghl_conn_close(ctx, ch);
                 if (si->sock != -1)
                   close(si->sock);
@@ -1023,6 +1057,9 @@ int main(int argc, char **argv) {
                   close(si->servsock);
                 llist_del_item(socklist, si);
                 hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+              
                 free(si);
               } else {
                 /* ok */
@@ -1035,6 +1072,8 @@ int main(int argc, char **argv) {
               if (r > 0) {
                 ghl_conn_send(ctx, ch, buf, r);
               } else {
+              fprintf(deb, "freeing SI because normal close: %x\n", si->ch->conn_id);
+              fflush(deb);
                 ghl_conn_close(ctx, ch);
                 if (si->sock != -1)
                   close(si->sock);
@@ -1042,6 +1081,9 @@ int main(int argc, char **argv) {
                   close(si->servsock);
                 llist_del_item(socklist, si);
                 hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+                
                 free(si);
               }
             }

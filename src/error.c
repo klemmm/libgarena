@@ -31,3 +31,14 @@ void garena_perror(char *msg) {
   }
 }  
 
+
+
+char *garena_strerror() {
+  static char buf[512];
+  if (garena_errno == GARENA_ERR_LIBC) {
+    snprintf(buf, sizeof(buf), "libc error: %s\n", strerror(errno));
+  } else {
+    snprintf(buf, sizeof(buf),  "garena error: %s\n", errstr[-garena_errno]);
+  }
+  return buf;
+}

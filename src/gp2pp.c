@@ -93,8 +93,6 @@ static int gp2pp_handle_conn_pkt(gp2pp_handtab_t *htab, char *buf, int length, s
  
 int gp2pp_input(gp2pp_handtab_t *htab, char *buf, int length, struct sockaddr_in *remote) {
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
-  fprintf(deb, "Received %x\n", hdr->msgtype);
-  fflush(deb);
   if (length < sizeof(gp2pp_hdr_t)) {
     garena_errno = GARENA_ERR_PROTOCOL;
     IFDEBUG(fprintf(stderr, "[DEBUG/GP2PP] Dropped short message.\n"));
