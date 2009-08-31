@@ -334,7 +334,9 @@ static int handle_peer_msg(int type, void *payload, int length, void *privdata, 
   switch(type) {
     case GP2PP_MSG_HELLO_REQ:
       IFDEBUG(printf("[GHL/DEBUG] Received HELLO request from %s\n", member->name));
-      remote->sin_port = member->external_port;
+      
+/*      remote->sin_port = member->external_port; */
+      member->external_port = remote->sin_port;
       gp2pp_send_hello_reply(ctx->peersock, ctx->my_id, user_id, remote);
       
       break;
