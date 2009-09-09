@@ -282,7 +282,6 @@ void hash_free(hash_t hash) {
     while(item != NULL) {
       old = item;
       item = item->next;
-      free(old->value); 
       free(old);
     }
   }  

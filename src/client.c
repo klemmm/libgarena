@@ -64,7 +64,6 @@ typedef struct  {
 
 
 ghl_ctx_t *ctx = NULL;
-ghl_rh_t *rh = NULL;
 screen_ctx_t screen;
 
 void screen_init(screen_ctx_t *screen) {
@@ -311,7 +310,6 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
     system(cmd);
   } else {
     screen_output(&screen, "Room join failed (timeout)\n");
-    rh = NULL;
   }
   return 0;
 }
@@ -337,13 +335,19 @@ int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   screen_output(&screen, buf);
 }
 
+int handle_disc(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+  ghl_room_disc_t *disc = event_param;
+  screen_output(&screen, "Lost connection to room server.\n");
+  
+}
+
 int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_udp_encap_t *udp_encap = event_param;
   struct ip *iph;
   struct udphdr *udph;
   ghl_rh_t *rh;
   char *buf;
-  rh = llist_head(ctx->rooms);
+  rh = ctx ? ctx->room : NULL;
   if (rh == NULL) {
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
@@ -585,6 +589,8 @@ int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
 void handle_fwd_tunnel(ghl_rh_t *rh) {
   char buf[65536];
   int r;
+  if (rh == NULL)
+    return;
   if ((r = read(fwdtun_fd, buf, sizeof(buf))) <= 0)
     return;
 
@@ -603,6 +609,8 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   ghl_member_t *cur;
   
   int r;
+  if (rh == NULL)
+    return;
   if ((r = read(tun_fd, buf, sizeof(buf))) <= 0)
     return;
   if (mangle_packet(rh, buf, r, TUN_TO_FWDTUN)) {
@@ -691,6 +699,7 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
   ghl_register_handler(ctx, GHL_EV_TALK, handle_talk, NULL);
   ghl_register_handler(ctx, GHL_EV_JOIN, handle_join, NULL);
   ghl_register_handler(ctx, GHL_EV_PART, handle_part, NULL);
+  ghl_register_handler(ctx, GHL_EV_ROOM_DISC, handle_disc, NULL);
   ghl_register_handler(ctx, GHL_EV_TOGGLEVPN, handle_togglevpn, NULL);
   ghl_register_handler(ctx, GHL_EV_UDP_ENCAP, handle_udp_encap, NULL);
 
@@ -702,6 +711,7 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
 
 int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
   int serv_ip;
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (parc != 3) {
     screen_output(screen, "Usage: /JOIN <room server IP> <room ID>\n");
     return -1;
@@ -731,6 +741,7 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_part(screen_ctx_t *screen, int parc, char **parv) {
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (rh && rh->joined) {
     ghl_leave_room(rh);
     rh = NULL;
@@ -740,6 +751,7 @@ int handle_cmd_part(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_startgame(screen_ctx_t *screen, int parc, char **parv) {
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (rh && rh->joined) {
     ghl_togglevpn(rh, 1);
     return 0;
@@ -748,6 +760,7 @@ int handle_cmd_startgame(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_stopgame(screen_ctx_t *screen, int parc, char **parv) {
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (rh && rh->joined) {
     ghl_togglevpn(rh, 0);
     return 0;
@@ -776,6 +789,7 @@ int handle_cmd_routing(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   char buf[512];
   ghl_member_t *member;
   cell_t iter;
@@ -796,10 +810,13 @@ int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
           (ghtonl(member->user_id) == strtol(parv[1], NULL, 16))) {
            snprintf(buf, 512, "Member name: %s\nUser ID: %x\nCountry: %s\nLevel: %u\nIn game: %s\nVirtual IP: 192.168.29.%u\n", member->name, member->user_id, member->country, member->level, member->vpn ? "yes" : "no", member->virtual_suffix);
           screen_output(screen, buf);
-          snprintf(buf, 512, "External ip/port: %s:%u\n", inet_ntoa(member->external_ip), htons(member->external_port));
+          snprintf(buf, 512, "External ip/port: %s:%u\n", inet_ntoa(member->external_ip), member->external_port);
           screen_output(screen, buf);
-          snprintf(buf, 512, "Internal ip/port: %s:%u\n", inet_ntoa(member->internal_ip), htons(member->internal_port));
+          snprintf(buf, 512, "Internal ip/port: %s:%u\n", inet_ntoa(member->internal_ip), member->internal_port);
           screen_output(screen, buf);
+          if (member->conn_ok) {
+            screen_output(screen, "Connex: OK\n");
+          } else screen_output(screen, "Connex: KO\n");
 
           return 0;
       }
@@ -811,6 +828,9 @@ int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
 
 int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
     char buf[512];
+    int num = 0;
+    ghl_rh_t *rh = ctx ? ctx->room : NULL;
+    int total = 0;
     cell_t iter;
     ghl_member_t *member;
     if (!rh || !rh->joined) {
@@ -823,6 +843,8 @@ int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
       if (!member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(screen, buf);
+        num += member->conn_ok ? 1 : 0;
+        total++;
       }
     }
     screen_output(screen, "\n");
@@ -832,9 +854,14 @@ int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
       if (member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(screen, buf);
+        num += member->conn_ok ? 1 : 0;
+        total++;
       }
     }
     screen_output(screen, "\n");
+    num++; /* add myself */
+    snprintf(buf, sizeof(buf), "Connection OK with %u on %u players\n", num, total);
+    screen_output(screen, buf);
     return 0;
 
 }
@@ -893,6 +920,7 @@ void handle_command(screen_ctx_t *screen, char *buf) {
 
 
 void handle_text(screen_ctx_t *screen, char *buf) {
+  ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (strlen(buf) == 0)
     return;
   if (rh && rh->joined) {
@@ -956,8 +984,8 @@ int main(int argc, char **argv) {
     FD_SET(fwdtun_fd, &fds);
     tunmax = MAX(tun_fd, fwdtun_fd);
     FD_SET(0, &fds);
-    if (ctx)
-      for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+    if (ctx && ctx->room)
+      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
         ch = llist_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
@@ -1004,14 +1032,16 @@ int main(int argc, char **argv) {
       }
     }
     if (FD_ISSET(tun_fd, &fds)) {
+      ghl_rh_t *rh = ctx ? ctx->room : NULL;
       handle_tunnel(ctx, rh);
     }
     if (FD_ISSET(fwdtun_fd, &fds)) {
+      ghl_rh_t *rh = ctx ? ctx->room : NULL;
       handle_fwd_tunnel(rh);
     }
     
-    if (ctx)
-      for (iter = llist_iter(ctx->conns); iter; iter = llist_next(iter)) {
+    if (ctx && ctx->room)
+      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
         ch = llist_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
@@ -1095,8 +1125,11 @@ int main(int argc, char **argv) {
 
   }
   
-  endwin();
+  llist_free_val(socklist);  
+  hash_free(ch2sock);
   ghl_free_ctx(ctx);  
+  garena_fini();
+  endwin();
   printf("bye...\n");
   faispaschier = 1;
   return 0;

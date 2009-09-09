@@ -4,11 +4,18 @@
  */
  
 #include <stdio.h>
+#include <signal.h>
 #include <garena/config.h>
 #include <garena/error.h>
 #include <garena/gcrp.h>
 
 FILE *deb;
+
+void garena_fini() {
+  ghl_fini();
+  if (deb != NULL)
+    fclose(deb);
+}
 
 int garena_init() {
   if (gcrp_init() == -1) {
@@ -25,7 +32,8 @@ int garena_init() {
     garena_errno = GARENA_ERR_LIBC;
     return -1;
   }
-  
+
+  signal(SIGPIPE, SIG_IGN);  
   printf("Garena library initialized (version %s)\n", VERSION);
   return 0;
 }

@@ -17,7 +17,8 @@
 #define GHL_EV_CONN_INCOMING 7
 #define GHL_EV_CONN_RECV 8
 #define GHL_EV_CONN_FIN 9
-#define GHL_EV_NUM 10
+#define GHL_EV_ROOM_DISC 10
+#define GHL_EV_NUM 11
 
 
 typedef int ghl_timerfun_t(void *privdata);
@@ -30,6 +31,9 @@ typedef struct {
 
 
 struct ghl_ctx_s;
+struct ghl_rh_s;
+struct ghl_member_s;
+struct ghl_ch_s;
 
 typedef int ghl_fun_t(struct ghl_ctx_s *ctx, int event, void *event_data, void *privdata);
 
@@ -38,35 +42,50 @@ typedef struct {
   void *privdata;
 } ghl_handler_t;
 
+
 typedef struct ghl_ctx_s {
   int servsock;
   int peersock;
   char myname[17];
   uint32_t my_id;
-  llist_t rooms;
+  struct ghl_rh_s *room;
   ghl_handler_t ghl_handlers[GHL_EV_NUM];
   gp2pp_handtab_t *gp2pp_htab;
   gcrp_handtab_t *gcrp_htab; 
   ghl_timer_t *hello_timer;
   ghl_timer_t *conn_retrans_timer;
-  llist_t conns;
 } ghl_ctx_t;
 
 
 
-typedef struct {
+typedef struct ghl_rh_s {
   int roomsock;
   int room_id;
-  gcrp_member_t *me;
+  struct ghl_member_s *me;
   ghl_ctx_t *ctx;
   llist_t members;
   int got_welcome, got_members;
   ghl_timer_t *timeout;
   int joined;
   char welcome[GCRP_MAX_MSGSIZE];
+  llist_t conns;
 } ghl_rh_t;
 
-typedef gcrp_member_t ghl_member_t;
+typedef struct ghl_member_s {
+  uint32_t user_id;
+  char name[17];  
+  char country[3];
+  uint16_t mbz;
+  char level;
+  char vpn;
+  struct in_addr external_ip, internal_ip, effective_ip;
+  uint32_t mbz2;
+  uint16_t external_port;
+  uint16_t internal_port;
+  uint16_t effective_port;
+  uint8_t virtual_suffix;
+  int conn_ok;
+} ghl_member_t;
 
 /* event structs */
 typedef struct {
@@ -105,7 +124,7 @@ typedef struct {
   char *payload;
 } ghl_udp_encap_t;
 
-typedef struct {
+typedef struct ghl_ch_s {
   int conn_id;
   int ts_base;
   int snd_una, snd_next, rcv_next;
@@ -126,6 +145,8 @@ typedef struct {
   int ts_rel;
   int length;
   int seq;
+  int did_fast_retrans;
+  int xmit_ts;
   char *payload;
 } ghl_ch_pkt_t;
 
@@ -133,6 +154,10 @@ typedef struct {
   ghl_ch_t *ch;
   int dport;
 } ghl_conn_incoming_t;
+
+typedef struct {
+  ghl_rh_t *rh;
+} ghl_room_disc_t;
 
 typedef struct {
   ghl_ch_t *ch;
@@ -169,6 +194,6 @@ int ghl_next_timer(struct timeval *tv);
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
 int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, int length);
-ghl_ch_t *ghl_conn_from_id(ghl_ctx_t *ctx, int conn_id);
-
+ghl_ch_t *ghl_conn_from_id(ghl_rh_t *rh, int conn_id);
+void ghl_fini();
 #endif
