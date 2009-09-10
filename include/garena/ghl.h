@@ -2,6 +2,8 @@
 #define GARENA_GHL_H 1
 #include <stdint.h>
 #include <garena/gcrp.h>
+#include <garena/gp2pp.h>
+#include <garena/gsp.h>
 #include <garena/util.h>
 
 
@@ -18,7 +20,8 @@
 #define GHL_EV_CONN_RECV 8
 #define GHL_EV_CONN_FIN 9
 #define GHL_EV_ROOM_DISC 10
-#define GHL_EV_NUM 11
+#define GHL_EV_SERVCONN 11
+#define GHL_EV_NUM 12
 
 
 typedef int ghl_timerfun_t(void *privdata);
@@ -43,15 +46,23 @@ typedef struct {
 } ghl_handler_t;
 
 
+typedef struct ghl_myinfo_s {
+  int id;
+} ghl_myinfo_t;
+
 typedef struct ghl_ctx_s {
   int servsock;
   int peersock;
+  int gp2pp_port;
+  int server_ip;
   char myname[17];
-  uint32_t my_id;
+  char md5pass[16];
+  ghl_myinfo_t my_info;
   struct ghl_rh_s *room;
   ghl_handler_t ghl_handlers[GHL_EV_NUM];
   gp2pp_handtab_t *gp2pp_htab;
   gcrp_handtab_t *gcrp_htab; 
+  gsp_handtab_t *gsp_htab;
   ghl_timer_t *hello_timer;
   ghl_timer_t *conn_retrans_timer;
 } ghl_ctx_t;
@@ -169,11 +180,13 @@ typedef struct {
   ghl_ch_t *ch;
 } ghl_conn_fin_t;
 
+typedef struct {
+} ghl_servconn_t;
 
 
 
 
-ghl_ctx_t *ghl_new_ctx(char *name, char *password, int my_id, int server_ip, int server_port);
+ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_port, int gp2pp_port);
 ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id);
 int ghl_leave_room(ghl_rh_t *rh);
 ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_id);
@@ -195,5 +208,6 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
 int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, int length);
 ghl_ch_t *ghl_conn_from_id(ghl_rh_t *rh, int conn_id);
+
 void ghl_fini();
 #endif

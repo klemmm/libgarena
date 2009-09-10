@@ -358,7 +358,7 @@ void* gp2pp_conn_handler_privdata(gp2pp_handtab_t *htab, int msgtype) {
 }
 
 
-int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port) {
+int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port, int *my_ip, int *my_port) {
   char buf[32];
   uint32_t *id = (uint32_t*) &buf[1];
   struct sockaddr_in fsocket;

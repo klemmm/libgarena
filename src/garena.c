@@ -18,6 +18,9 @@ void garena_fini() {
 }
 
 int garena_init() {
+  if (gsp_init() == -1) {
+    return -1;
+  }
   if (gcrp_init() == -1) {
     return -1;
   }

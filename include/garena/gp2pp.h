@@ -121,7 +121,7 @@ int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote);
 int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, int length, struct sockaddr_in *remote);
 
 int gp2pp_get_tsnow();
-int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port);
+int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port, int *my_ip, int *my_port);
 int gp2pp_register_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_fun_t *fun, void *privdata);
 int gp2pp_unregister_handler(gp2pp_handtab_t *tab,int msgtype);
 void* gp2pp_handler_privdata(gp2pp_handtab_t *tab, int msgtype);
