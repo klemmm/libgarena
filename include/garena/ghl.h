@@ -55,6 +55,8 @@ typedef struct ghl_ctx_s {
   int peersock;
   int gp2pp_port;
   int server_ip;
+  char session_key[GSP_KEYSIZE];
+  char session_iv[GSP_IVSIZE];
   char myname[17];
   char md5pass[16];
   ghl_myinfo_t my_info;

@@ -166,21 +166,26 @@ static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam) {
   }
 }
 
-static int handle_login(int type, void *payload, int length, void *privdata) {
+static int handle_auth(int type, void *payload, int length, void *privdata) {
   int my_ip, my_port;
   gsp_myinfo_t *myinfo = payload;
-  ghl_servconn_t servconn_ev;
   
   ghl_ctx_t *ctx = privdata;
   switch(type) {
     case GSP_MSG_MYINFO:
       myinfo_extract(&ctx->my_info, myinfo);
-      gp2pp_do_ip_lookup(ctx->peersock, ctx->my_info.id, ctx->server_ip, ctx->gp2pp_port, &my_ip, &my_port);
-      ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn_ev);
+      gp2pp_do_ip_lookup(ctx->peersock, ctx->server_ip, ctx->gp2pp_port, &my_ip, &my_port);
+      gp2pp_request_roominfo(ctx->peersock, ctx->my_info.id, ctx->server_ip, ctx->gp2pp_port);
       break;
     default:
       garena_errno = GARENA_ERR_INVALID;
   }
+}
+
+static int handle_ip_lookup(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
+}
+
+static int handle_roominfo(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
 }
 
 static int handle_initconn_msg(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
@@ -750,7 +755,8 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     garena_errno = GARENA_ERR_LIBC;
     goto err;
   }
-  
+  if (gsp_open_session(ctx->servsock, ctx->session_key, ctx->session_iv) == -1)
+    goto err;
   
   mh = mhash_init(MHASH_MD5);
   if (mh == NULL)
@@ -759,7 +765,7 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   mhash(mh, password, strlen(password));
   mhash_deinit(mh, &md5pass);
   
-  gsp_send_login(ctx->servsock, name, md5pass); 
+  gsp_send_login(ctx->servsock, name, md5pass, ctx->session_key, ctx->session_iv); 
   
   memcpy(ctx->md5pass, md5pass, 16);
   strncpy(ctx->myname, name, sizeof(ctx->myname)-1);
@@ -779,7 +785,7 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     goto err;
   
   /* GSP handlers */
-  if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_MYINFO, handle_login, ctx) == -1)
+  if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_MYINFO, handle_auth, ctx) == -1)
     goto err;
   
   /* GCRP handlers */
@@ -806,6 +812,10 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_HELLO_REP, handle_peer_msg, ctx) == -1)
     goto err;
   if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_INITCONN, handle_initconn_msg, ctx) == -1)
+    goto err;
+  if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_ROOMINFO_REPLY, handle_roominfo, ctx) == -1)
+    goto err;
+  if (gp2pp_register_handler(ctx->gp2pp_htab, GP2PP_MSG_IP_LOOKUP_REPLY, handle_ip_lookup, ctx) == -1)
     goto err;
 
   /* GP2PP CONN handlers */
@@ -1001,6 +1011,9 @@ int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
   FD_SET(ctx->peersock, fds);
   if (ctx->peersock > max)
     max = ctx->peersock;
+  FD_SET(ctx->servsock, fds);
+  if (ctx->servsock > max)
+    max = ctx->servsock;
   /* FD_SET(ctx->servsock, fds); */
   return max;
 }
@@ -1100,7 +1113,12 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
       gp2pp_input(ctx->gp2pp_htab, buf, r, &remote);
     }
   }
-  /* FD_SET(ctx->servsock, fds); */
+  if (FD_ISSET(ctx->servsock, fds)) {
+    r = gsp_read(ctx->servsock, buf, GSP_MAX_MSGSIZE);
+    if (r != -1) {
+      gsp_input(ctx->gsp_htab, buf, r, ctx->session_key, ctx->session_iv);
+    }
+  }
   return 0;
 }
 

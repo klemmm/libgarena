@@ -26,10 +26,12 @@
 
 #define GP2PP_MSG_UDP_ENCAP 0x01
 #define GP2PP_MSG_HELLO_REQ 0x02
+#define GP2PP_MSG_IP_LOOKUP_REPLY 0x06
 #define GP2PP_MSG_INITCONN 0x0b
 #define GP2PP_MSG_CONN_PKT 0x0d
 #define GP2PP_MSG_HELLO_REP 0x0F
-#define GP2PP_MSG_NUM 0x10
+#define GP2PP_MSG_ROOMINFO_REPLY 0x3F
+#define GP2PP_MSG_NUM 0x40
 
 #define GP2PP_CONN_MSG_FIN 0x01
 #define GP2PP_CONN_MSG_ACK 0x0E
@@ -119,9 +121,10 @@ int gp2pp_send_initconn(int sock, int from_ID, int conn_id, int dport, int sip, 
 int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in *remote);
 int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote);
 int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, int length, struct sockaddr_in *remote);
+int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port);
 
 int gp2pp_get_tsnow();
-int gp2pp_do_ip_lookup(int sock, int my_id, int server_ip, int server_port, int *my_ip, int *my_port);
+int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port, int *my_ip, int *my_port);
 int gp2pp_register_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_fun_t *fun, void *privdata);
 int gp2pp_unregister_handler(gp2pp_handtab_t *tab,int msgtype);
 void* gp2pp_handler_privdata(gp2pp_handtab_t *tab, int msgtype);
