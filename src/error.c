@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <errno.h>
+#include <string.h>
 #include <garena/error.h>
 #include <garena/garena.h>
 

@@ -14,6 +14,9 @@
 #include <garena/error.h>
 #include <garena/util.h>
 
+void gcrp_fini(void) {
+}
+
 int gcrp_init(void) {
   return 0;
 }
@@ -45,11 +48,12 @@ gcrp_handtab_t *gcrp_alloc_handtab (void) {
  */
  
 int gcrp_tochar(char *dst, char *src, size_t size) {
-  int i;
+  unsigned int i;
   for (i = 0; (i < (size-1)) && (src[i << 1] != 0); i++) {
     dst[i] = src[i << 1];
   }
   dst[i] = 0;
+  return 0;
 }
 
 /**
@@ -62,13 +66,14 @@ int gcrp_tochar(char *dst, char *src, size_t size) {
  */
  
 int gcrp_fromchar(char *dst, char *src, size_t size) {
-  int i;
+  unsigned int i;
   for (i = 0; (i < (size-1)) && (src[i] != 0); i++) {
     dst[i << 1] = src[i];
     dst[(i << 1) + 1] = 0;
   }
   dst[i << 1] = 0;
   dst[(i << 1) + 1] = 0;
+  return 0;
 }
 
 
@@ -82,7 +87,7 @@ int gcrp_fromchar(char *dst, char *src, size_t size) {
  * @return Size of the message (including GCRP header), or -1 for failure
  */
 
-int gcrp_read(int sock, char *buf, int length) {
+int gcrp_read(int sock, char *buf, unsigned int length) {
   int toread;
   int r;
   
@@ -115,7 +120,7 @@ int gcrp_read(int sock, char *buf, int length) {
  * @return 0 for success, -1 for failure
  */
  
-int gcrp_input(gcrp_handtab_t *htab, char *buf, int length, void *roomdata) {
+int gcrp_input(gcrp_handtab_t *htab, char *buf, unsigned int length, void *roomdata) {
   gcrp_hdr_t *hdr = (gcrp_hdr_t *) buf;
   if (length < sizeof(gcrp_hdr_t)) {
     garena_errno = GARENA_ERR_PROTOCOL;
@@ -127,15 +132,17 @@ int gcrp_input(gcrp_handtab_t *htab, char *buf, int length, void *roomdata) {
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-  if ((hdr->msgtype < 0) || (hdr->msgtype >= GCRP_MSG_NUM) || (htab->gcrp_handlers[hdr->msgtype].fun == NULL)) {
+  if ((hdr->msgtype >= GCRP_MSG_NUM) || (htab->gcrp_handlers[hdr->msgtype].fun == NULL)) {
     fprintf(deb, "[DEBUG/GCRP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, hdr->msglen - 1);
     fflush(deb);
   } else {
     
     if (htab->gcrp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gcrp_hdr_t), length - sizeof(gcrp_hdr_t), htab->gcrp_handlers[hdr->msgtype].privdata, roomdata) == -1) {
       garena_perror("[WARN/GCRP] Error while handling message");
+      return -1;
     }
   }
+  return 0;
 }
 
 
@@ -148,7 +155,7 @@ int gcrp_input(gcrp_handtab_t *htab, char *buf, int length, void *roomdata) {
   * @param length Length of the data (in bytes) 
   * @return 0 for success, -1 for failure
   */
-int gcrp_output(int sock, int type, char *payload, int length) {
+int gcrp_output(int sock, int type, char *payload, unsigned int length) {
   static char buf[GCRP_MAX_MSGSIZE];
   gcrp_hdr_t *hdr = (gcrp_hdr_t *) buf;
   if (length + sizeof(gcrp_hdr_t) > GCRP_MAX_MSGSIZE) {
@@ -173,14 +180,12 @@ int gcrp_output(int sock, int type, char *payload, int length) {
  * @param room_id The ROOM ID of the room to join
  * @return 0 for succes, -1 for failure
  */
-int gcrp_send_join(int sock, int room_id) {
+int gcrp_send_join(int sock, unsigned int room_id) {
   static char buf[GCRP_MAX_MSGSIZE];
   gcrp_me_join_t *join = (gcrp_me_join_t *) buf;
   join->room_id = ghtonl(room_id);
   memcpy(buf + sizeof(gcrp_me_join_t), GCRP_JOINCODE, sizeof(GCRP_JOINCODE)-1);
-  if (gcrp_output(sock, GCRP_MSG_JOIN, buf, sizeof(GCRP_JOINCODE) + sizeof(gcrp_me_join_t) - 1) == -1) {
-    return -1;
-  }
+  return gcrp_output(sock, GCRP_MSG_JOIN, buf, sizeof(GCRP_JOINCODE) + sizeof(gcrp_me_join_t) - 1);
 }
 
 /**
@@ -192,16 +197,14 @@ int gcrp_send_join(int sock, int room_id) {
  * @param text The text (null terminated)
  * @return 0 for succes, -1 for failure
  */
-int gcrp_send_talk(int sock, int room_id, int user_id, char *text) {
+int gcrp_send_talk(int sock, unsigned int room_id, int user_id, char *text) {
   static char buf[GCRP_MAX_MSGSIZE];
   gcrp_talk_t *talk = (gcrp_talk_t *) buf;
   talk->room_id = ghtonl(room_id);
   talk->user_id = ghtonl(user_id);
   talk->length = ghtonl(strlen(text) << 1);
   gcrp_fromchar(talk->text, text, sizeof(buf) - sizeof(gcrp_talk_t));
-  if (gcrp_output(sock, GCRP_MSG_TALK, buf, sizeof(gcrp_talk_t) + talk->length) == -1) {
-    return -1;
-  }
+  return gcrp_output(sock, GCRP_MSG_TALK, buf, sizeof(gcrp_talk_t) + talk->length);
 }
 
 /**
@@ -216,9 +219,7 @@ int gcrp_send_togglevpn(int sock, int user_id, int vpn) {
   static char buf[GCRP_MAX_MSGSIZE];
   gcrp_togglevpn_t *toggle = (gcrp_togglevpn_t *) buf;
   toggle->user_id = ghtonl(user_id);
-  if (gcrp_output(sock, vpn ? GCRP_MSG_STARTVPN : GCRP_MSG_STOPVPN, buf, sizeof(gcrp_togglevpn_t)) == -1) {
-    return -1;
-  }
+  return gcrp_output(sock, vpn ? GCRP_MSG_STARTVPN : GCRP_MSG_STOPVPN, buf, sizeof(gcrp_togglevpn_t));
 }
 
 /**
@@ -232,9 +233,7 @@ int gcrp_send_part(int sock, int user_id) {
   static char buf[GCRP_MAX_MSGSIZE];
   gcrp_part_t *part = (gcrp_part_t *) buf;
   part->user_id = ghtonl(user_id);
-  if (gcrp_output(sock, GCRP_MSG_PART, buf, sizeof(gcrp_part_t)) == -1) {
-    return -1;
-  }
+  return gcrp_output(sock, GCRP_MSG_PART, buf, sizeof(gcrp_part_t));
 }
 
 

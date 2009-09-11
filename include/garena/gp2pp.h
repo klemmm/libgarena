@@ -90,6 +90,10 @@ struct gp2pp_hello_req_s {
 } __attribute__ ((packed));
 typedef struct gp2pp_hello_req_s gp2pp_hello_req_t;
 
+struct gp2pp_roominfo_reply_s {
+} __attribute__ ((packed));
+typedef struct gp2pp_roominfo_reply_s gp2pp_roominfo_reply_t;
+
 struct gp2pp_lookup_reply_s {
   char mbz[7];
   struct in_addr my_external_ip;
@@ -98,8 +102,8 @@ struct gp2pp_lookup_reply_s {
 } __attribute__ ((packed));
 
 typedef struct gp2pp_lookup_reply_s gp2pp_lookup_reply_t;
-typedef int gp2pp_fun_t(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote);
-typedef int gp2pp_conn_fun_t(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
+typedef int gp2pp_fun_t(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote);
+typedef int gp2pp_conn_fun_t(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 
 typedef struct {
   gp2pp_fun_t *fun;
@@ -119,16 +123,16 @@ typedef struct  {
 
 
 
-int gp2pp_read(int sock, char *buf, int length, struct sockaddr_in *remote);
+int gp2pp_read(int sock, char *buf, unsigned int length, struct sockaddr_in *remote);
 
-int gp2pp_output(int sock, int type, char *payload, int length, int user_id, struct sockaddr_in *remote);
-int gp2pp_output_conn(int sock, int subtype, char *payload, int length, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
-int gp2pp_input(gp2pp_handtab_t *tab, char *buf, int length, struct sockaddr_in *remote);
+int gp2pp_output(int sock, int type, char *payload, unsigned int length, int user_id, struct sockaddr_in *remote);
+int gp2pp_output_conn(int sock, int subtype, char *payload, unsigned int length, int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
+int gp2pp_input(gp2pp_handtab_t *tab, char *buf, unsigned int length, struct sockaddr_in *remote);
 
-int gp2pp_send_initconn(int sock, int from_ID, int conn_id, int dport, int sip, struct sockaddr_in *remote);
+int gp2pp_send_initconn(int sock, int from_ID, unsigned int conn_id, int dport, int sip, struct sockaddr_in *remote);
 int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in *remote);
 int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote);
-int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, int length, struct sockaddr_in *remote);
+int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, unsigned int length, struct sockaddr_in *remote);
 int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port);
 
 int gp2pp_get_tsnow();
@@ -140,6 +144,8 @@ int gp2pp_register_conn_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_conn_fun
 int gp2pp_unregister_conn_handler(gp2pp_handtab_t *tab,int msgtype);
 void* gp2pp_conn_handler_privdata(gp2pp_handtab_t *tab, int msgtype);
 gp2pp_handtab_t *gp2pp_alloc_handtab (void);
-
+int gp2pp_init();
+void gp2pp_fini();
+int gp2pp_new_conn_id(void);
 
 #endif

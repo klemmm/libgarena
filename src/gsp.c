@@ -50,6 +50,9 @@ static char gsp_rsa_private[] =
 "ioX2ZNntCCPlIti48TeFs0etqcHQgQ5rSLblyde3RIuRcqatQko=\n"
 "-----END RSA PRIVATE KEY-----\n";
 
+void gsp_fini(void) {
+}
+
 int gsp_init(void) {
   return 0;
 }
@@ -79,7 +82,7 @@ gsp_handtab_t *gsp_alloc_handtab (void) {
   return htab;
 }
 
-int gsp_read(int sock, char *buf, int length) {
+int gsp_read(int sock, char *buf, unsigned int length) {
   int toread;
   uint32_t *size;
   int r;
@@ -119,10 +122,10 @@ int gsp_read(int sock, char *buf, int length) {
  * @return 0 for success, -1 for failure
  */
  
-int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
+int gsp_input(gsp_handtab_t *htab, char *buf, unsigned int length, unsigned char *key, unsigned char *iv) {
   AES_KEY aeskey;
-  char tmp_iv[GSP_IVSIZE];
-  static char plaintext[GSP_MAX_MSGSIZE];
+  unsigned char tmp_iv[GSP_IVSIZE];
+  static unsigned char plaintext[GSP_MAX_MSGSIZE];
   uint32_t *size = (uint32_t *) buf;
   gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
   
@@ -144,9 +147,9 @@ int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
   AES_set_decrypt_key(key, GSP_KEYSIZE << 3, &aeskey);
   memcpy(tmp_iv, iv, sizeof(tmp_iv));
   
-  AES_cbc_encrypt(buf + sizeof(uint32_t), plaintext, length - sizeof(uint32_t), &aeskey, tmp_iv, AES_DECRYPT);
+  AES_cbc_encrypt((unsigned char*)buf + sizeof(uint32_t), plaintext, length - sizeof(uint32_t), &aeskey, tmp_iv, AES_DECRYPT);
   
-  if ((hdr->msgtype < 0) || (hdr->msgtype >= GSP_MSG_NUM) || (htab->gsp_handlers[hdr->msgtype].fun == NULL)) {
+  if ((hdr->msgtype >= GSP_MSG_NUM) || (htab->gsp_handlers[hdr->msgtype].fun == NULL)) {
     fprintf(deb, "[DEBUG/GSP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, ghtonl(*size & 0xFFFFFF));
     fflush(deb);
   } else {
@@ -155,6 +158,7 @@ int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
 /*       garena_perror("[WARN/GSP] Error while handling message"); */
     }
   }
+  return 0;
 }
 
 
@@ -167,10 +171,10 @@ int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
   * @param length Length of the data (in bytes) 
   * @return 0 for success, -1 for failure
   */
-int gsp_output(int sock, int type, char *payload, int length, char *key, char *iv) {
-  static char plaintext[GSP_MAX_MSGSIZE];
-  static char ciphertext[GSP_MAX_MSGSIZE];
-  static char tmp_iv[GSP_IVSIZE];
+int gsp_output(int sock, int type, char *payload, unsigned int length, unsigned char *key, unsigned char *iv) {
+  static unsigned char plaintext[GSP_MAX_MSGSIZE];
+  static unsigned char ciphertext[GSP_MAX_MSGSIZE];
+  static unsigned char tmp_iv[GSP_IVSIZE];
   gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
   AES_KEY aeskey;
   uint32_t *size = (uint32_t *) ciphertext;
@@ -262,13 +266,12 @@ void* gsp_handler_privdata(gsp_handtab_t *htab, int msgtype) {
 }
 
 
-int gsp_send_login(int sock, char *login, char *md5pass, char *key, char *iv) {
+int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv) {
   gsp_login_t msg;
   struct sockaddr_in local;
   static char *hex_digit = "0123456789abcdef";
   int i,j;
-  uint16_t tmp_hex;
-  int local_len = sizeof(local);
+  unsigned int local_len = sizeof(local);
   
   memset(&msg, 0, sizeof(msg));
   strncpy(msg.name, login, 16);
@@ -284,20 +287,20 @@ int gsp_send_login(int sock, char *login, char *md5pass, char *key, char *iv) {
   return gsp_output(sock, GSP_MSG_LOGIN, (char*) &msg, sizeof(msg), key, iv);
 }
 
-int gsp_send_hello(int sock, char *key, char *iv) {
+int gsp_send_hello(int sock, unsigned char *key, unsigned char *iv) {
   gsp_hello_t msg;
   memcpy(msg.country, "EN", 2);
   msg.magic = ghtonl(GSP_HELLO_MAGIC);
   return gsp_output(sock, GSP_MSG_HELLO, (char*) &msg, sizeof(msg), key, iv);  
 }
 
-int gsp_open_session(int sock, char *key, char *iv) {
+int gsp_open_session(int sock, unsigned char *key, unsigned char *iv) {
   RSA *rsa = NULL;
   BIO *bio = NULL;
-  char *ciphertext = NULL;
+  unsigned char *ciphertext = NULL;
   int signsize;
   int rcode = -1;
-  char plaintext[GSP_IVSIZE + GSP_KEYSIZE + sizeof(uint16_t)];
+  unsigned char plaintext[GSP_IVSIZE + GSP_KEYSIZE + sizeof(uint16_t)];
   uint16_t *magic;
   gsp_sessionhdr_t hdr;
   

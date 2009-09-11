@@ -8,11 +8,17 @@
 #include <garena/config.h>
 #include <garena/error.h>
 #include <garena/gcrp.h>
+#include <garena/gsp.h>
+#include <garena/gp2pp.h>
+#include <garena/ghl.h>
 
 FILE *deb;
 
 void garena_fini() {
   ghl_fini();
+  gsp_fini();
+  gcrp_fini();
+  gp2pp_fini();
   if (deb != NULL)
     fclose(deb);
 }

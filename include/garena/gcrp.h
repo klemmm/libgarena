@@ -26,7 +26,7 @@
 #define GCRP_MSG_STARTVPN 0x3a
 #define GCRP_MSG_STOPVPN 0x39
 
-#define GCRP_MSG_NUM 0x100
+#define GCRP_MSG_NUM 0x3b
 
 struct gcrp_hdr_s {
   uint32_t msglen;
@@ -42,7 +42,7 @@ typedef struct gcrp_me_join_s gcrp_me_join_t;
 
 struct gcrp_welcome_s {
   uint32_t room_id;
-  wchar_t text[0];
+  char text[0];
 } __attribute__ ((packed));
 typedef struct gcrp_welcome_s gcrp_welcome_t;
 
@@ -92,7 +92,7 @@ struct gcrp_memberlist_s {
 typedef struct gcrp_memberlist_s gcrp_memberlist_t;
 
 
-typedef int gcrp_fun_t(int type, void *payload, int length, void *privdata, void *roomdata);
+typedef int gcrp_fun_t(int type, void *payload, unsigned int length, void *privdata, void *roomdata);
 
 typedef struct {
   gcrp_fun_t *fun;
@@ -104,20 +104,22 @@ typedef struct  {
 } gcrp_handtab_t;
 
 
-int gcrp_read(int sock, char *buf, int length);
+int gcrp_read(int sock, char *buf, unsigned int length);
 
-int gcrp_output(int sock, int type, char *payload, int length);
-int gcrp_input(gcrp_handtab_t *,char *buf, int length, void *roomdata);
+int gcrp_output(int sock, int type, char *payload, unsigned int length);
+int gcrp_input(gcrp_handtab_t *,char *buf, unsigned int length, void *roomdata);
 
 int gcrp_register_handler(gcrp_handtab_t *,int msgtype, gcrp_fun_t *fun, void *privdata);
 int gcrp_unregister_handler(gcrp_handtab_t *, int msgtype);
 void* gcrp_handler_privdata(gcrp_handtab_t *, int msgtype);
-int gcrp_send_join(int sock, int room_id);
+int gcrp_send_join(int sock, unsigned int room_id);
 int gcrp_send_togglevpn(int sock, int user_id, int vpn);
 int gcrp_send_part(int sock, int user_id);
-int gcrp_send_talk(int sock, int room_id, int user_id, char *text);
+int gcrp_send_talk(int sock, unsigned int room_id, int user_id, char *text);
 gcrp_handtab_t *gcrp_alloc_handtab (void);
-
-
+int gcrp_init();
+void gcrp_fini();
+int gcrp_tochar(char *dst, char *src, size_t size);
+int gcrp_fromchar(char *dst, char *src, size_t size);
 
 #endif

@@ -50,7 +50,7 @@ typedef struct {
 
 
 typedef struct ghl_myinfo_s {
-  int id;
+  unsigned int id;
 } ghl_myinfo_t;
 
 typedef struct ghl_ctx_s {
@@ -58,8 +58,8 @@ typedef struct ghl_ctx_s {
   int peersock;
   int gp2pp_port;
   int server_ip;
-  char session_key[GSP_KEYSIZE];
-  char session_iv[GSP_IVSIZE];
+  unsigned char session_key[GSP_KEYSIZE];
+  unsigned char session_iv[GSP_IVSIZE];
   char myname[17];
   char md5pass[16];
   int auth_ok;
@@ -75,13 +75,14 @@ typedef struct ghl_ctx_s {
   gsp_handtab_t *gsp_htab;
   ghl_timer_t *hello_timer;
   ghl_timer_t *conn_retrans_timer;
+  hash_t roominfo;
 } ghl_ctx_t;
 
 
 
 typedef struct ghl_rh_s {
   int roomsock;
-  int room_id;
+  unsigned int room_id;
   struct ghl_member_s *me;
   ghl_ctx_t *ctx;
   llist_t members;
@@ -141,12 +142,12 @@ typedef struct {
   ghl_member_t *member;
   int sport;
   int dport;
-  int length;
+  unsigned int length;
   char *payload;
 } ghl_udp_encap_t;
 
 typedef struct ghl_ch_s {
-  int conn_id;
+  unsigned int conn_id;
   int ts_base;
   int snd_una, snd_next, rcv_next;
   llist_t sendq;
@@ -164,7 +165,7 @@ typedef struct ghl_ch_s {
 typedef struct {
   ghl_ch_t *ch;
   int ts_rel;
-  int length;
+  unsigned int length;
   int seq;
   int did_fast_retrans;
   int xmit_ts;
@@ -182,7 +183,7 @@ typedef struct {
 
 typedef struct {
   ghl_ch_t *ch;
-  int length;
+  unsigned int length;
   char *payload;
 } ghl_conn_recv_t;
 
@@ -200,17 +201,17 @@ typedef struct {
 ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_port, int gp2pp_port);
 void ghl_free_ctx(ghl_ctx_t *ctx);
 
-ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id);
+ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, unsigned int room_id);
 int ghl_leave_room(ghl_rh_t *rh);
 
-ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_id);
-ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_id);
+ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, unsigned int user_id);
+ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, unsigned int user_id);
 
 int ghl_togglevpn(ghl_rh_t *rh, int vpn);
 
 int ghl_talk(ghl_rh_t *rh, char *text);
 
-int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, int length);
+int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, unsigned int length);
 
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds);
 int ghl_process(ghl_ctx_t *ctx, fd_set *fds);
@@ -219,7 +220,7 @@ int ghl_register_handler(ghl_ctx_t *ctx, int event, ghl_fun_t *fun, void *privda
 int ghl_unregister_handler(ghl_ctx_t *ctx, int event);
 void* ghl_handler_privdata(ghl_ctx_t *ctx, int event);
 
-ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_id);
+ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, unsigned int room_id);
 
 ghl_timer_t * ghl_new_timer(int when, ghl_timerfun_t *fun, void *privdata);
 void ghl_free_timer(ghl_timer_t *timer);
@@ -227,8 +228,9 @@ void ghl_free_timer(ghl_timer_t *timer);
 int ghl_next_timer(struct timeval *tv);
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
-int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, int length);
-ghl_ch_t *ghl_conn_from_id(ghl_rh_t *rh, int conn_id);
+int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int length);
+ghl_ch_t *ghl_conn_from_id(ghl_rh_t *rh, unsigned int conn_id);
 
+int ghl_init();
 void ghl_fini();
 #endif

@@ -87,7 +87,7 @@ struct gsp_login_s {
 typedef struct gsp_login_s gsp_login_t;
 
 
-typedef int gsp_fun_t(int type, void *payload, int length, void *privdata);
+typedef int gsp_fun_t(int type, void *payload, unsigned int length, void *privdata);
 
 typedef struct {
   gsp_fun_t *fun;
@@ -99,15 +99,18 @@ typedef struct  {
 } gsp_handtab_t;
 
 
-int gsp_open_session(int sock, char *key, char *iv); 
+int gsp_open_session(int sock, unsigned char *key, unsigned char *iv); 
 
-int gsp_read(int sock, char *buf, int length);
-int gsp_output(int sock, int type, char *payload, int length, char *key, char *iv);
-int gsp_input(gsp_handtab_t *,char *buf, int length, char *key, char *iv);
+int gsp_read(int sock, char *buf, unsigned int length);
+int gsp_output(int sock, int type, char *payload, unsigned int length, unsigned char *key, unsigned char *iv);
+int gsp_input(gsp_handtab_t *,char *buf, unsigned int length, unsigned char *key, unsigned char *iv);
 int gsp_register_handler(gsp_handtab_t *,int msgtype, gsp_fun_t *fun, void *privdata);
 int gsp_unregister_handler(gsp_handtab_t *, int msgtype);
 void* gsp_handler_privdata(gsp_handtab_t *, int msgtype);
-int gsp_send_login(int sock, char *login, char *md5pass, char *key, char *iv);
+int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv);
 gsp_handtab_t *gsp_alloc_handtab (void);
+int gsp_send_hello(int sock, unsigned char *key, unsigned char *iv);
 
+int gsp_init();
+void gsp_fini();
 #endif

@@ -52,7 +52,7 @@ int tun_fd, fwdtun_fd;
 hash_t ch2sock;
 llist_t socklist;
 
-int routing_host=INADDR_NONE;
+unsigned int routing_host=INADDR_NONE;
 
 int quit = 0;
 int need_free_ctx = 0;
@@ -68,7 +68,6 @@ ghl_ctx_t *ctx = NULL;
 screen_ctx_t screen;
 
 void screen_init(screen_ctx_t *screen) {
-  int x, y;
   initscr();
   cbreak();
   noecho();
@@ -87,7 +86,6 @@ void screen_init(screen_ctx_t *screen) {
 
 
 void screen_output(screen_ctx_t *screen, char *buf) {
-    int x,y;
     wprintw(screen->text, "%s", buf);
     wrefresh(screen->text);
     wrefresh(screen->cmd);
@@ -160,7 +158,6 @@ int screen_input(screen_ctx_t *screen, char *buf, int len) {
 
 
 int resolve(char *addr) {
-  struct in_addr inaddr; 
   if (inet_addr(addr) == INADDR_NONE) {
       struct hostent *he;
       fflush(stdout);
@@ -208,7 +205,6 @@ static int set_nonblock(int sock) {
 int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   int sock;
   int r;
-  char buf[512];
   ghl_conn_incoming_t *conn_incoming = event_param;
   struct sockaddr_in fsocket;
   sockinfo_t *si;
@@ -262,7 +258,7 @@ int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
 }
 
 int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
-  char *buf;;
+  char *buf;
   ghl_conn_recv_t *conn_recv = event_param;
   ghl_ch_t *ch = conn_recv->ch;
   int sock;
@@ -288,6 +284,7 @@ int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
     screen_output(&screen, "Connection to server failed.\n");
     need_free_ctx = 1;
   }
+  return 0;
 }
 
 int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -332,6 +329,7 @@ int handle_talk(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   char buf[512];
   snprintf(buf, 512, "%x <%s> %s\n", talk->rh->room_id, talk->member->name, talk->text);
   screen_output(&screen, buf);
+  return 0;
 }
 
 int handle_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -339,6 +337,7 @@ int handle_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   char buf[512];
   snprintf(buf, 512, "%x %s[%x] joined the room.\n", join->rh->room_id, join->member->name, join->member->user_id);
   screen_output(&screen, buf);
+  return 0;
 }
 
 int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -346,12 +345,12 @@ int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   char buf[512];
   snprintf(buf, 512, "%x %s left the room.\n", part->rh->room_id, part->member->name);
   screen_output(&screen, buf);
+  return 0;
 }
 
 int handle_disc(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
-  ghl_room_disc_t *disc = event_param;
   screen_output(&screen, "Lost connection to room server.\n");
-  
+  return 0;
 }
 
 int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -398,7 +397,7 @@ int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
     return -1;
   }
   free(buf);
-  
+  return 0;
 }
 
 int handle_togglevpn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -406,6 +405,7 @@ int handle_togglevpn(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   char buf[512];
   snprintf(buf, 512, "%x %s %s a game.\n", togglevpn->rh->room_id, togglevpn->member->name, togglevpn->vpn ? "started" : "stopped");
   screen_output(&screen, buf);
+  return 0;
 }
 
 
@@ -456,7 +456,7 @@ void l4d_patchpkt(int virtual_suffix, char *buf, int length) {
           }
 }
 
-int tcp_chksum(unsigned char *buffer, int length) {
+int tcp_chksum(char *buffer, int length) {
   struct pseudo_hdr {  /* rfc 793 tcp pseudo-header */
          unsigned int saddr, daddr;
          char mbz;
@@ -492,22 +492,21 @@ int tcp_chksum(unsigned char *buffer, int length) {
 
 #define FWDTUN_TO_TUN 0
 #define TUN_TO_FWDTUN 1
-int mangle_packet(ghl_rh_t *rh, char *buf, int size, int direction) {
+int mangle_packet(ghl_rh_t *rh, char *buf, unsigned int size, int direction) {
   struct ip *iph;
   int r;
   struct sockaddr_in remote;
-  int remotelen;
+  unsigned int remotelen;
   sockinfo_t *si;
   int optval;
-  ghl_ch_t *ch;
   int sock;
   ghl_member_t *cur;
   ghl_member_t *member;
   cell_t iter;
   struct sockaddr_in local;
   struct tcphdr *tcph;
-  int network_source = (direction == FWDTUN_TO_TUN) ? inet_addr(FWD_NETWORK) : inet_addr(GARENA_NETWORK);
-  int network_dest = (direction == FWDTUN_TO_TUN) ? inet_addr(GARENA_NETWORK) : inet_addr(FWD_NETWORK);
+  unsigned int network_source = (direction == FWDTUN_TO_TUN) ? inet_addr(FWD_NETWORK) : inet_addr(GARENA_NETWORK);
+  unsigned int network_dest = (direction == FWDTUN_TO_TUN) ? inet_addr(GARENA_NETWORK) : inet_addr(FWD_NETWORK);
     
   if (size < (sizeof(struct ip) + sizeof(struct tcphdr)))
     return 0;
@@ -631,7 +630,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
     return;
   }
   
-  if (r < (sizeof(struct ip) + sizeof(struct udphdr)))
+  if ((unsigned)r < (sizeof(struct ip) + sizeof(struct udphdr)))
     return;
   iph = (struct ip*) buf;
   udph = (struct udphdr*) (buf + sizeof(struct ip));
@@ -724,7 +723,7 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
-  int serv_ip;
+  unsigned int serv_ip;
   ghl_rh_t *rh = ctx ? ctx->room : NULL;
   if (parc != 3) {
     screen_output(screen, "Usage: /JOIN <room server IP> <room ID>\n");
@@ -821,7 +820,7 @@ int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
       if  ((strcasecmp(member->name, parv[1]) == 0) ||
           ( ((member->virtual_suffix << 24) | inet_addr(GARENA_NETWORK)) == inet_addr(parv[1]) ) ||
           (member->external_ip.s_addr == inet_addr(parv[1])) ||
-          (ghtonl(member->user_id) == strtol(parv[1], NULL, 16))) {
+          (ghtonl(member->user_id) == strtoul(parv[1], NULL, 16))) {
            snprintf(buf, 512, "Member name: %s\nUser ID: %x\nCountry: %s\nLevel: %u\nIn game: %s\nVirtual IP: 192.168.29.%u\n", member->name, member->user_id, member->country, member->level, member->vpn ? "yes" : "no", member->virtual_suffix);
           screen_output(screen, buf);
           snprintf(buf, 512, "External ip/port: %s:%u\n", inet_ntoa(member->external_ip), member->external_port);
@@ -954,14 +953,13 @@ int main(int argc, char **argv) {
   fd_set fds, wfds;
   char buf[4096];
   struct sockaddr_in dummy;
-  int dummy_size;
+  unsigned int dummy_size;
   int tunmax;
   struct timeval tv;
   int r;
   ghl_ch_t *ch;
   cell_t iter;
   sockinfo_t *si;
-  int input = 0;
   atexit(kaka);
   
   if (argc != 2) {

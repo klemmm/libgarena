@@ -203,8 +203,8 @@ void llist_empty_val(llist_t desc) {
 
 static unsigned int hash_func(hash_keytype id) {
  char *buf = (char*) &id;
- int i;
- int res = 0;
+ unsigned int i;
+ unsigned int res = 0;
  for (i = 0; i < sizeof(hash_keytype); i++)
  {
    res = res ^ buf[i];
@@ -214,7 +214,7 @@ static unsigned int hash_func(hash_keytype id) {
 
 int hash_num(hash_t hash) {
   hashitem_t item;
-  int i;
+  unsigned int i;
   int num = 0;
   
   for (i = 0; i < hash->size; i++) {
@@ -274,7 +274,7 @@ int hash_del(hash_t hash, hash_keytype key) {
 }
 
 void hash_free(hash_t hash) {
-  int i;
+  unsigned int i;
   hashitem_t item,old;
   
   for (i = 0 ; i < hash->size; i++) {
