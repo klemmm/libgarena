@@ -24,6 +24,9 @@
 #define GHL_EV_NUM 12
 
 
+#define GHL_EV_RES_SUCCESS 0
+#define GHL_EV_RES_FAILURE -1
+
 typedef int ghl_timerfun_t(void *privdata);
 
 typedef struct {
@@ -59,7 +62,12 @@ typedef struct ghl_ctx_s {
   char session_iv[GSP_IVSIZE];
   char myname[17];
   char md5pass[16];
+  int auth_ok;
+  int lookup_ok;
+  int connected;
   ghl_myinfo_t my_info;
+  struct in_addr my_external_ip;
+  int my_external_port;
   struct ghl_rh_s *room;
   ghl_handler_t ghl_handlers[GHL_EV_NUM];
   gp2pp_handtab_t *gp2pp_htab;
@@ -183,28 +191,39 @@ typedef struct {
 } ghl_conn_fin_t;
 
 typedef struct {
+  int result;
 } ghl_servconn_t;
 
 
 
 
 ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_port, int gp2pp_port);
+void ghl_free_ctx(ghl_ctx_t *ctx);
+
 ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, int room_id);
 int ghl_leave_room(ghl_rh_t *rh);
+
 ghl_member_t *ghl_member_from_id(ghl_rh_t *rh, int user_id);
 ghl_member_t *ghl_global_find_member(ghl_ctx_t *ctx, int user_id);
+
 int ghl_togglevpn(ghl_rh_t *rh, int vpn);
+
 int ghl_talk(ghl_rh_t *rh, char *text);
+
 int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, int length);
+
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds);
 int ghl_process(ghl_ctx_t *ctx, fd_set *fds);
+
 int ghl_register_handler(ghl_ctx_t *ctx, int event, ghl_fun_t *fun, void *privdata);
 int ghl_unregister_handler(ghl_ctx_t *ctx, int event);
 void* ghl_handler_privdata(ghl_ctx_t *ctx, int event);
+
 ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, int room_id);
+
 ghl_timer_t * ghl_new_timer(int when, ghl_timerfun_t *fun, void *privdata);
 void ghl_free_timer(ghl_timer_t *timer);
-void ghl_free_ctx(ghl_ctx_t *ctx);
+
 int ghl_next_timer(struct timeval *tv);
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);

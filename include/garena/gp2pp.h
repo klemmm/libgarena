@@ -90,6 +90,14 @@ struct gp2pp_hello_req_s {
 } __attribute__ ((packed));
 typedef struct gp2pp_hello_req_s gp2pp_hello_req_t;
 
+struct gp2pp_lookup_reply_s {
+  char mbz[7];
+  struct in_addr my_external_ip;
+  uint16_t my_external_port;
+  uint16_t mbz2;
+} __attribute__ ((packed));
+
+typedef struct gp2pp_lookup_reply_s gp2pp_lookup_reply_t;
 typedef int gp2pp_fun_t(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote);
 typedef int gp2pp_conn_fun_t(int subtype, void *payload, int length, void *privdata, int user_id, int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 
@@ -124,7 +132,7 @@ int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payl
 int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port);
 
 int gp2pp_get_tsnow();
-int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port, int *my_ip, int *my_port);
+int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port);
 int gp2pp_register_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_fun_t *fun, void *privdata);
 int gp2pp_unregister_handler(gp2pp_handtab_t *tab,int msgtype);
 void* gp2pp_handler_privdata(gp2pp_handtab_t *tab, int msgtype);

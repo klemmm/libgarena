@@ -380,6 +380,9 @@ int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port) 
   char buf[32];
   struct sockaddr_in fsocket;
   uint32_t *id = (uint32_t *) (buf + 1);
+  fsocket.sin_family = PF_INET;
+  fsocket.sin_addr.s_addr = server_ip;
+  fsocket.sin_port = htons(server_port);
 
   memset(buf, 0, sizeof(buf));
   buf[0] = 2;
@@ -391,7 +394,7 @@ int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port) 
 
 }
 
-int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port, int *my_ip, int  *my_port) {
+int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port) {
   char buf[32];
   struct sockaddr_in fsocket;
   

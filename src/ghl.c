@@ -167,22 +167,49 @@ static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam) {
 }
 
 static int handle_auth(int type, void *payload, int length, void *privdata) {
-  int my_ip, my_port;
   gsp_myinfo_t *myinfo = payload;
+  ghl_servconn_t servconn;
   
   ghl_ctx_t *ctx = privdata;
   switch(type) {
     case GSP_MSG_MYINFO:
       myinfo_extract(&ctx->my_info, myinfo);
-      gp2pp_do_ip_lookup(ctx->peersock, ctx->server_ip, ctx->gp2pp_port, &my_ip, &my_port);
-      gp2pp_request_roominfo(ctx->peersock, ctx->my_info.id, ctx->server_ip, ctx->gp2pp_port);
+      ctx->auth_ok = 1;
+      if ((ctx->connected = ctx->lookup_ok)) {
+        servconn.result = GHL_EV_RES_SUCCESS;
+        ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
+      }
+      break;
+    case GSP_MSG_AUTH_FAIL:
+      servconn.result = GHL_EV_RES_FAILURE;
+      ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
       break;
     default:
       garena_errno = GARENA_ERR_INVALID;
+      return -1;
   }
+  return 0;
 }
 
 static int handle_ip_lookup(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
+  ghl_servconn_t servconn;
+  ghl_ctx_t *ctx = privdata;
+  gp2pp_lookup_reply_t *lookup = payload;
+  switch(type) {
+    case GP2PP_MSG_IP_LOOKUP_REPLY:
+      ctx->my_external_ip = lookup->my_external_ip;
+      ctx->my_external_port = htons(lookup->my_external_port);
+      ctx->lookup_ok = 1;
+      if ((ctx->connected = ctx->auth_ok)) {
+        servconn.result = GHL_EV_RES_SUCCESS;
+        ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
+      }
+      break;
+    default:
+      garena_errno = GARENA_ERR_INVALID;
+      return -1;
+  }
+  return 0;
 }
 
 static int handle_roominfo(int type, void *payload, int length, void *privdata, int user_id, struct sockaddr_in *remote) {
@@ -483,7 +510,7 @@ static int handle_room_join_timeout(void *privdata) {
   ghl_me_join_t join;
   ghl_rh_t *rh = privdata;
 /*  printf("Room %x join timeouted.\n", rh->room_id); */
-  join.result = -1;
+  join.result = GHL_EV_RES_FAILURE;
   join.rh = rh;
   err |= (ghl_signal_event(rh->ctx, GHL_EV_ME_JOIN, &join) == -1);
   rh->timeout = NULL; /* prevent ghl_free_room from deleting the timer we are currently handling */
@@ -569,7 +596,7 @@ static int handle_room_join(int type, void *payload, int length, void *privdata,
   }
   
   if (rh && rh->got_welcome && rh->got_members) {
-    join.result = 0;
+    join.result = GHL_EV_RES_SUCCESS;
     join.rh = rh;
     ghl_free_timer(rh->timeout);
     rh->timeout = 0;
@@ -722,10 +749,14 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   ctx->room = NULL;
   ctx->gp2pp_htab = NULL;
   ctx->gcrp_htab = NULL;
+  ctx->gsp_htab = NULL;
   ctx->peersock = -1;
   ctx->gp2pp_port = gp2pp_port ? gp2pp_port : GP2PP_PORT;
   ctx->hello_timer = NULL;
+  ctx->auth_ok = 0;
+  ctx->lookup_ok = 0;
   ctx->my_info.id = 0;
+  ctx->connected = 0;
   ctx->server_ip = server_ip;
     
   ctx->servsock = socket(PF_INET, SOCK_STREAM, 0);
@@ -757,7 +788,14 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   }
   if (gsp_open_session(ctx->servsock, ctx->session_key, ctx->session_iv) == -1)
     goto err;
+  if (gsp_send_hello(ctx->servsock, ctx->session_key, ctx->session_iv) == -1)
+    goto err;
   
+  if (gp2pp_do_ip_lookup(ctx->peersock, ctx->server_ip, ctx->gp2pp_port) == -1)
+    goto err;
+  if (gp2pp_request_roominfo(ctx->peersock, ctx->my_info.id, ctx->server_ip, ctx->gp2pp_port) == -1)
+    goto err;
+
   mh = mhash_init(MHASH_MD5);
   if (mh == NULL)
     goto err;
@@ -765,7 +803,8 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   mhash(mh, password, strlen(password));
   mhash_deinit(mh, &md5pass);
   
-  gsp_send_login(ctx->servsock, name, md5pass, ctx->session_key, ctx->session_iv); 
+  if (gsp_send_login(ctx->servsock, name, md5pass, ctx->session_key, ctx->session_iv) == -1)
+    goto err;
   
   memcpy(ctx->md5pass, md5pass, 16);
   strncpy(ctx->myname, name, sizeof(ctx->myname)-1);
@@ -783,9 +822,14 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   ctx->gp2pp_htab = gp2pp_alloc_handtab();
   if (ctx->gp2pp_htab == NULL)
     goto err;
+  ctx->gsp_htab = gsp_alloc_handtab();
+  if (ctx->gsp_htab == NULL)
+    goto err;
   
   /* GSP handlers */
   if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_MYINFO, handle_auth, ctx) == -1)
+    goto err;
+  if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_AUTH_FAIL, handle_auth, ctx) == -1)
     goto err;
   
   /* GCRP handlers */
@@ -840,6 +884,8 @@ err:
     free(ctx->gp2pp_htab);
   if (ctx->gcrp_htab)
     free(ctx->gcrp_htab);
+  if (ctx->gsp_htab)
+    free(ctx->gsp_htab);
   if (ctx->servsock != -1)
     close(ctx->servsock);
   if (ctx->peersock != -1)
@@ -1249,8 +1295,11 @@ void ghl_free_ctx(ghl_ctx_t *ctx) {
   /* free all rooms */
   if (ctx->room)
     ghl_free_room(ctx->room);
+  close(ctx->peersock);
+  close(ctx->servsock);
   free(ctx->gcrp_htab);
   free(ctx->gp2pp_htab);
+  free(ctx->gsp_htab);
   free(ctx);
 }
 

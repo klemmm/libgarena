@@ -13,6 +13,8 @@
 #include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <openssl/aes.h>
+
 #include <garena/garena.h>
 #include <garena/gsp.h>
 #include <garena/error.h>
@@ -50,6 +52,17 @@ static char gsp_rsa_private[] =
 
 int gsp_init(void) {
   return 0;
+}
+
+static inline char gsp_pad(int type) {
+  switch(type) {
+    case GSP_MSG_HELLO:
+      return 0x09;
+    case GSP_MSG_LOGIN:
+      return 0x0A;
+    default:
+      return 0;
+  }
 }
 
 gsp_handtab_t *gsp_alloc_handtab (void) {
@@ -107,13 +120,18 @@ int gsp_read(int sock, char *buf, int length) {
  */
  
 int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
+  AES_KEY aeskey;
+  char tmp_iv[GSP_IVSIZE];
+  static char plaintext[GSP_MAX_MSGSIZE];
   uint32_t *size = (uint32_t *) buf;
+  gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
+  
   if (length < sizeof(uint32_t)) {
     garena_errno = GARENA_ERR_PROTOCOL;
     IFDEBUG(fprintf(stderr, "[DEBUG/GSP] Dropped short message.\n"));
     return -1;
   }
-  if ((length - sizeof(uint32_t)) != ghtonl(*size)) {
+  if ((length - sizeof(uint32_t)) != (ghtonl(*size) & 0xFFFFFF)) {
     IFDEBUG(fprintf(stderr, "[DEBUG/GSP] Dropped malformed message."));
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
@@ -122,17 +140,21 @@ int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-  /*
+  
+  AES_set_decrypt_key(key, GSP_KEYSIZE << 3, &aeskey);
+  memcpy(tmp_iv, iv, sizeof(tmp_iv));
+  
+  AES_cbc_encrypt(buf + sizeof(uint32_t), plaintext, length - sizeof(uint32_t), &aeskey, tmp_iv, AES_DECRYPT);
+  
   if ((hdr->msgtype < 0) || (hdr->msgtype >= GSP_MSG_NUM) || (htab->gsp_handlers[hdr->msgtype].fun == NULL)) {
-    fprintf(deb, "[DEBUG/GSP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, hdr->msglen - 1);
+    fprintf(deb, "[DEBUG/GSP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, ghtonl(*size & 0xFFFFFF));
     fflush(deb);
   } else {
     
-    if (htab->gsp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gsp_hdr_t), length - sizeof(gsp_hdr_t), htab->gsp_handlers[hdr->msgtype].privdata, roomdata) == -1) {
-      garena_perror("[WARN/GSP] Error while handling message");
+    if (htab->gsp_handlers[hdr->msgtype].fun(hdr->msgtype, plaintext + sizeof(gsp_hdr_t), length - sizeof(gsp_hdr_t), htab->gsp_handlers[hdr->msgtype].privdata) == -1) {
+/*       garena_perror("[WARN/GSP] Error while handling message"); */
     }
   }
-  */
 }
 
 
@@ -146,24 +168,31 @@ int gsp_input(gsp_handtab_t *htab, char *buf, int length, char *key, char *iv) {
   * @return 0 for success, -1 for failure
   */
 int gsp_output(int sock, int type, char *payload, int length, char *key, char *iv) {
-  static char buf[GSP_MAX_MSGSIZE];
-  uint32_t *size = (uint32_t *) buf;
+  static char plaintext[GSP_MAX_MSGSIZE];
+  static char ciphertext[GSP_MAX_MSGSIZE];
+  static char tmp_iv[GSP_IVSIZE];
+  gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
+  AES_KEY aeskey;
+  uint32_t *size = (uint32_t *) ciphertext;
 
-  if (length + sizeof(uint32_t) + sizeof(gsp_hdr_t) > GSP_MAX_MSGSIZE) {
+  if (sizeof(uint32_t) + GSP_BLOCK_ROUND(length + sizeof(gsp_hdr_t)) > GSP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
   }
   
-  /*
-  hdr->msglen = ghtonl(length + 1); 
+  AES_set_encrypt_key(key, GSP_KEYSIZE << 3, &aeskey);
+  memcpy(tmp_iv, iv, sizeof(tmp_iv));
+  
+  *size = ghtonl(GSP_BLOCK_ROUND(length + sizeof(gsp_hdr_t)) | 0x01000000);
+  if (*size % 16) abort();
+  memset(plaintext, gsp_pad(type), sizeof(plaintext));
   hdr->msgtype = type;
-  memcpy(buf + sizeof(gsp_hdr_t), payload, length);
-  if (write(sock, buf, length + sizeof(gsp_hdr_t)) == -1) {
+  memcpy(plaintext + sizeof(gsp_hdr_t), payload, length);
+  AES_cbc_encrypt(plaintext, ciphertext + sizeof(uint32_t), GSP_BLOCK_ROUND(length + sizeof(gsp_hdr_t)), &aeskey, tmp_iv, AES_ENCRYPT);
+  if (write(sock, ciphertext, sizeof(uint32_t) + GSP_BLOCK_ROUND(length + sizeof(gsp_hdr_t))) == -1) {
     garena_errno = GARENA_ERR_LIBC;
     return -1;
   }
-  IFDEBUG(fprintf(stderr, "[DEBUG/GSP] Sent a message of type %x (payload length = %x)\n", type, length));
-  */
   return 0;
 }
 
@@ -234,6 +263,32 @@ void* gsp_handler_privdata(gsp_handtab_t *htab, int msgtype) {
 
 
 int gsp_send_login(int sock, char *login, char *md5pass, char *key, char *iv) {
+  gsp_login_t msg;
+  struct sockaddr_in local;
+  static char *hex_digit = "0123456789abcdef";
+  int i,j;
+  uint16_t tmp_hex;
+  int local_len = sizeof(local);
+  
+  memset(&msg, 0, sizeof(msg));
+  strncpy(msg.name, login, 16);
+  msg.name[15] = 0;
+  msg.pwhash_size = GSP_PWHASHSIZE;
+  getsockname(sock, (struct sockaddr*) &local, &local_len);
+  msg.internal_ip = local.sin_addr;
+  msg.internal_port = local.sin_port;
+  for (i = 0, j = 0; i < GSP_PWHASHSIZE; i += 2, j++) {
+    msg.pwhash[i] = hex_digit[(md5pass[j] >> 4) & 0xF];
+    msg.pwhash[i+1] = hex_digit[md5pass[j] & 0xF];
+  }
+  return gsp_output(sock, GSP_MSG_LOGIN, (char*) &msg, sizeof(msg), key, iv);
+}
+
+int gsp_send_hello(int sock, char *key, char *iv) {
+  gsp_hello_t msg;
+  memcpy(msg.country, "EN", 2);
+  msg.magic = ghtonl(GSP_HELLO_MAGIC);
+  return gsp_output(sock, GSP_MSG_HELLO, (char*) &msg, sizeof(msg), key, iv);  
 }
 
 int gsp_open_session(int sock, char *key, char *iv) {
@@ -242,7 +297,7 @@ int gsp_open_session(int sock, char *key, char *iv) {
   char *ciphertext = NULL;
   int signsize;
   int rcode = -1;
-  char plaintext[50];
+  char plaintext[GSP_IVSIZE + GSP_KEYSIZE + sizeof(uint16_t)];
   uint16_t *magic;
   gsp_sessionhdr_t hdr;
   
@@ -276,6 +331,7 @@ int gsp_open_session(int sock, char *key, char *iv) {
   memcpy(plaintext + GSP_KEYSIZE, iv, GSP_IVSIZE);
   magic = (uint16_t *) (plaintext + GSP_KEYSIZE + GSP_IVSIZE);
   *magic = GSP_SESSION_MAGIC;
+  memset(ciphertext, RSA_size(rsa), 0);
   signsize = RSA_private_encrypt(sizeof(plaintext), plaintext, ciphertext, rsa, RSA_PKCS1_PADDING);   
   if (signsize == -1) {
     garena_errno = GARENA_ERR_UNKNOWN;
@@ -292,6 +348,8 @@ int gsp_open_session(int sock, char *key, char *iv) {
     garena_errno = GARENA_ERR_LIBC;
     goto out;
   }
+  
+  rcode = 0;
   
   out:
    if (ciphertext)

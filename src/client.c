@@ -55,6 +55,7 @@ llist_t socklist;
 int routing_host=INADDR_NONE;
 
 int quit = 0;
+int need_free_ctx = 0;
 
 typedef struct  {
   WINDOW *text;
@@ -277,13 +278,25 @@ int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   return 0;
 }
 
+int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+  char buf[256];
+  ghl_servconn_t *servconn = event_param;
+  if (servconn->result == GHL_EV_RES_SUCCESS) {
+    snprintf(buf, 256, "Connected to server (my external ip/port is %s:%u).\n", inet_ntoa(ctx->my_external_ip), ctx->my_external_port);
+    screen_output(&screen, buf);
+  } else {
+    screen_output(&screen, "Connection to server failed.\n");
+    need_free_ctx = 1;
+  }
+}
+
 int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   ghl_me_join_t *join = event_param;
   cell_t iter;
   char cmd[128];
   char buf[512];
   ghl_member_t *member;
-  if (join->result == EXIT_SUCCESS) {
+  if (join->result == GHL_EV_RES_SUCCESS) {
     screen_output(&screen, join->rh->welcome);
     screen_output(&screen, "Room members [not playing]: ");
     for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
@@ -681,20 +694,21 @@ typedef struct {
 
 
 int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
-  if (parc != 2) {
-    screen_output(screen, "Usage: /CONNECT <your nick>");
+  if (parc != 3) {
+    screen_output(screen, "Usage: /CONNECT <your nick> <your pass>");
     return -1;
   }
   if (ctx != NULL) {
     screen_output(screen, "You are already connected\n");
     return -1;
   }
-  ctx = ghl_new_ctx(parv[1], "tamere", 0x128829c, inet_addr("74.55.122.122"), 0);
+  ctx = ghl_new_ctx(parv[1], parv[2], inet_addr("74.55.122.122"), 0, 0);
   if (ctx == NULL) {
     screen_output(screen, "Context creation failed\n");
     return -1;
   }
   
+  ghl_register_handler(ctx, GHL_EV_SERVCONN, handle_servconn, NULL);
   ghl_register_handler(ctx, GHL_EV_ME_JOIN, handle_me_join, NULL);
   ghl_register_handler(ctx, GHL_EV_TALK, handle_talk, NULL);
   ghl_register_handler(ctx, GHL_EV_JOIN, handle_join, NULL);
@@ -977,6 +991,11 @@ int main(int argc, char **argv) {
   socklist = llist_alloc();
   
   while(!quit) {
+    if (need_free_ctx) {
+      ghl_free_ctx(ctx);
+      ctx = NULL;
+      need_free_ctx = 0;
+    }
     FD_ZERO(&fds);
     FD_ZERO(&wfds);
     r = ctx ? ghl_fill_fds(ctx, &fds) : 0;
