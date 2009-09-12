@@ -101,12 +101,12 @@ static int do_conn_retrans(void *privdata) {
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
       if ((pkt->seq - ch->snd_una) > GP2PP_MAX_IN_TRANSIT) {
-        fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
+/*        fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id); */
         fflush(deb);
         break;
       }
       if ((pkt->xmit_ts + GP2PP_CONN_RETRANS_DELAY) <= now) {
-        fprintf(deb, "[GHL] Retransmitting packet, seq=%u\n", pkt->seq);
+/*        fprintf(deb, "[GHL] Retransmitting packet, seq=%u\n", pkt->seq); */
         xmit_packet(ctx, pkt);
         pkt->did_fast_retrans = 0;
         retrans++;
@@ -148,7 +148,7 @@ static void do_fast_retrans(ghl_ctx_t *ctx, llist_t sendq, int up_to) {
       break;
     if (pkt->did_fast_retrans == 0) {
       xmit_packet(ctx, pkt);
-        fprintf(deb, "[GHL] Fast-retransmitting packet, seq=%u\n", pkt->seq);
+/*        fprintf(deb, "[GHL] Fast-retransmitting packet, seq=%u\n", pkt->seq); */
       
       pkt->did_fast_retrans = 1;
     }
@@ -369,10 +369,8 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
           free(pkt->payload);
           free(pkt);
           ch->rcv_next_deliver++;
-        } else if (r == -1) {
-          fprintf(deb, "receive error\n");
-        } else {
-          fprintf(deb, "partial receive\n");
+        } else if (r != -1) {
+/*          fprintf(deb, "partial receive\n"); */
           memmove(pkt->payload, pkt->payload + r, pkt->length - r);
           pkt->length -= r;
         }
@@ -472,7 +470,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-  fprintf(deb, "[%x] ACK, this_ack=%u next_expected=%u\n", conn_id, seq1, seq2);
+/*  fprintf(deb, "[%x] ACK, this_ack=%u next_expected=%u\n", conn_id, seq1, seq2); */
   ch = ghl_conn_from_id(rh, conn_id);
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -484,7 +482,8 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     ch->snd_una = seq2;
     ch->ts_ack = time(NULL);
   } else {
-    fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
+    if ((seq2 - ch->snd_una) < 0)
+      fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
   }
   
   
@@ -525,7 +524,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
     return -1;
   }
   ch = ghl_conn_from_id(rh, conn_id);
-  fprintf(deb, "[%x] DATA, this_seq=%u next_expected=%u\n", conn_id, seq1, seq2);
+/*  fprintf(deb, "[%x] DATA, this_seq=%u next_expected=%u\n", conn_id, seq1, seq2); */
     
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -565,7 +564,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   if ((ch->cstate == GHL_CSTATE_CLOSING_IN) && ((seq1 - ch->finseq) > 0)) {
     return 0;
   }
-  fprintf(deb, "Received CONN DATA message from %s:%u\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port));
+/*  fprintf(deb, "Received CONN DATA message from %s:%u\n", inet_ntoa(remote->sin_addr), htons(remote->sin_port)); */ 
   fflush(deb);
   
   pkt = malloc(sizeof(ghl_ch_pkt_t));
@@ -578,7 +577,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->partial = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
-  if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_delivered) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
+  if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
     insert_pkt(ch->recvq, pkt);
     update_next(ctx, ch); 
   }
@@ -1706,7 +1705,7 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
   insert_pkt(ch->sendq, pkt);
   if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) {
     xmit_packet(ctx, pkt);
-    fprintf(deb, "[GHL] Initial packet transmit: seq=%u\n", pkt->seq);
+/*    fprintf(deb, "[GHL] Initial packet transmit: seq=%u\n", pkt->seq); */
   }
   return 0;
 }

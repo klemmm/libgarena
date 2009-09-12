@@ -457,6 +457,7 @@ int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   si = hash_get(ch2sock, ch);
   sock = si->sock;
   r= write(sock, buf, conn_recv->length);
+  free(buf);
   return r;
 }
 
