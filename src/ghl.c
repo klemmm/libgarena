@@ -90,13 +90,13 @@ static int do_conn_retrans(void *privdata) {
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
       if ((pkt->create_ts + GP2PP_CONN_TIMEOUT) < now) {
-        break;
         fprintf(deb, "[GHL] Connection ID %x with user %s timed out.\n", ch->conn_id, ch->member->name);
         todel = ch;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
           conn_fin_ev.ch = ch;
           ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
         }
+        break;
       }
       if ((ch->snd_una + GP2PP_MAX_IN_TRANSIT) < pkt->seq) {
         fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
