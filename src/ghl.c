@@ -496,6 +496,8 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
       todel = pkt;
     }
+    if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
+      xmit_packet(ctx, pkt);
   }
   if (todel != NULL) {
       llist_del_item(ch->sendq, todel);
@@ -1698,7 +1700,8 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
     ch->ts_ack = time(NULL);
   }
   insert_pkt(ch->sendq, pkt);
-  xmit_packet(ctx, pkt);
+  if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) 
+    xmit_packet(ctx, pkt);
   return 0;
 }
 
