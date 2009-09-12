@@ -311,7 +311,6 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
 }
 
 static void update_next(ghl_ctx_t *ctx, ghl_ch_t *ch) {
-  int seq;
   cell_t iter;
   ghl_conn_recv_t conn_recv_ev;
   ghl_conn_fin_t conn_fin_ev;
@@ -327,7 +326,6 @@ static void update_next(ghl_ctx_t *ctx, ghl_ch_t *ch) {
     if (pkt->seq == ch->rcv_next)
       ch->rcv_next++;
   }
-  ch->rcv_next = seq;
 }
 
 static void try_deliver_one(ghl_ctx_t *ctx) {
