@@ -89,6 +89,15 @@ static int do_conn_retrans(void *privdata) {
     ch = llist_val(iter);
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
+      if ((pkt->create_ts + GP2PP_CONN_TIMEOUT) < now) {
+        break;
+        fprintf(deb, "[GHL] Connection ID %x with user %s timed out.\n", ch->conn_id, ch->member->name);
+        todel = ch;
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+          conn_fin_ev.ch = ch;
+          ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
+        }
+      }
       if ((ch->snd_una + GP2PP_MAX_IN_TRANSIT) < pkt->seq) {
         fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
         fflush(deb);
@@ -103,14 +112,6 @@ static int do_conn_retrans(void *privdata) {
     if (llist_is_empty(ch->sendq) &&  (ch->cstate == GHL_CSTATE_CLOSING_OUT)) {
       todel = ch;
       continue;
-    }
-    if (!llist_is_empty(ch->sendq) && ((ch->ack_ts + GP2PP_CONN_TIMEOUT) < time(NULL))) {
-     fprintf(deb, "[GHL] Connection ID %x with user %s timed out.\n", ch->conn_id, ch->member->name);
-     todel = ch;
-     if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-       conn_fin_ev.ch = ch;
-       ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
-     }
     }
   }
   
@@ -280,7 +281,6 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   conn_incoming_ev.ch->recvq = llist_alloc();
   conn_incoming_ev.ch->snd_una = 0;
   conn_incoming_ev.ch->ctx = ctx;
-  conn_incoming_ev.ch->ack_ts = time(NULL);
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
@@ -405,7 +405,6 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     }
     pkt = llist_val(iter);
     if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
-      ch->ack_ts = time(NULL);
       todel = pkt;
     }
   }
@@ -457,7 +456,6 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
     }
     pkt = llist_val(iter);
     if ((ch->snd_una - pkt->seq) >= 1) {
-      ch->ack_ts = time(NULL);
       todel = pkt;
     }
   }
@@ -1432,7 +1430,6 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
   ch->sendq = llist_alloc();
   ch->recvq = llist_alloc();
   ch->ctx = ctx;
-  ch->ack_ts = time(NULL);
   ch->snd_una = 0;
   ch->snd_next = 0;
   ch->rcv_next = 0;
@@ -1572,6 +1569,7 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
   pkt->ts_rel = (now - ch->ts_base);
   pkt->ch = ch;
   pkt->xmit_ts = 0;
+  pkt->create_ts = time(NULL);
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   

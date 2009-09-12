@@ -171,7 +171,6 @@ typedef struct ghl_ch_s {
   ghl_ctx_t *ctx;
   ghl_member_t *member;
   int finseq;
-  int ack_ts;
 } ghl_ch_t;   
 
 typedef struct {
@@ -181,6 +180,7 @@ typedef struct {
   int seq;
   int did_fast_retrans;
   int xmit_ts;
+  int create_ts;
   char *payload;
 } ghl_ch_pkt_t;
 
