@@ -455,11 +455,12 @@ int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   memcpy(buf, conn_recv->payload, conn_recv->length);
   si = hash_get(ch2sock, ch);
   sock = si->sock;
-  if (sock != 0) {
-    write(sock, buf, conn_recv->length);
-  }
+  if ((sock != 0) && (write(sock, buf, conn_recv->length) != -1)) {
+    free(buf);
+    return 0;
+  } 
   free(buf);
-  return 0;
+  return -1;
 }
 
 int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
@@ -1234,6 +1235,7 @@ int main(int argc, char **argv) {
   cell_t iter;
   int max_conn_pkt;
   sockinfo_t *si;
+  int has_timer;
   
   if (argc != 2) {
     printf("usage: %s <tunnel interface to use>\n", argv[0]);
@@ -1310,7 +1312,10 @@ int main(int argc, char **argv) {
         }
       }
     
-    if (ghl_next_timer(&tv)) {
+    has_timer = ctx ? ghl_fill_tv(ctx, &tv) : 0;
+    
+    usleep(10000);
+    if (has_timer) {
       r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, &tv);
     } else {
       r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, NULL);

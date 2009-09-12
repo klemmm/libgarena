@@ -313,7 +313,7 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
   ghl_conn_recv_t conn_recv_ev;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
-  ghl_ch_pkt_t *old = NULL;
+  ghl_ch_pkt_t *todel = NULL;
   
   if (llist_is_empty(ch->recvq))
     return;
@@ -326,8 +326,9 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
         conn_recv_ev.ch = ch;
         conn_recv_ev.payload = pkt->payload;
         conn_recv_ev.length = pkt->length;
-        if (ch->cstate != GHL_CSTATE_CLOSING_OUT)
-          ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+           ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+        }
       } else {
         conn_fin_ev.ch = ch;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
@@ -335,20 +336,100 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
           ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
         }
       }
-      if (old) {
-        llist_del_item(ch->recvq, old);
-        free(old->payload);
-        free(old);
+      if (todel) {
+        llist_del_item(ch->recvq, todel);
+        free(todel->payload);
+        free(todel);
+        todel = NULL;
       }
-      old = pkt;
+      todel = pkt;
   }
   ch->rcv_next = seq;
-  if (old) {
-    llist_del_item(ch->recvq, old);
-    free(old->payload);
-    free(old);
+  if (todel) {
+    llist_del_item(ch->recvq, todel);
+    free(todel->payload);
+    free(todel);
   }
 
+}
+
+static void try_deliver_one(ghl_ctx_t *ctx) {
+  int seq;
+  cell_t iter;
+  cell_t c_iter;
+  ghl_conn_recv_t conn_recv_ev;
+  ghl_conn_fin_t conn_fin_ev;
+  ghl_ch_pkt_t *pkt;
+  ghl_ch_pkt_t *todel = NULL;
+  ghl_ch_t *ch = NULL;
+
+  if (ctx->room == NULL)
+    return;
+    
+  if (llist_is_empty(ctx->room->conns))
+    return;
+    
+   
+  for (c_iter = llist_iter(ctx->room->conns); c_iter; c_iter = llist_next(c_iter)) {
+    ch = llist_val(c_iter);
+    if (llist_is_empty(ch->recvq))
+      continue;
+    seq = ch->rcv_next;
+    pkt = llist_head(ch->recvq);
+    if (pkt->seq == ch->rcv_next) {
+      if (pkt->length > 0) {
+        conn_recv_ev.ch = ch;
+        conn_recv_ev.payload = pkt->payload;
+        conn_recv_ev.length = pkt->length;
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+           ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+        }
+      } else {
+        conn_fin_ev.ch = ch;
+        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+          ch->cstate = GHL_CSTATE_CLOSING_OUT;
+          ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
+        }
+      }
+      llist_del_item(ch->recvq, pkt);
+      free(pkt->payload);
+      free(pkt);
+      ch->rcv_next++;
+      break;
+    }
+    
+  }
+}
+
+
+static int can_deliver_one(ghl_ctx_t *ctx) {
+  int seq;
+  cell_t iter;
+  cell_t c_iter;
+  ghl_conn_recv_t conn_recv_ev;
+  ghl_conn_fin_t conn_fin_ev;
+  ghl_ch_pkt_t *pkt;
+  ghl_ch_pkt_t *todel = NULL;
+  ghl_ch_t *ch = NULL;
+
+  if (ctx->room == NULL)
+    return 0;
+    
+  if (llist_is_empty(ctx->room->conns))
+    return 0;
+   
+  for (c_iter = llist_iter(ctx->room->conns); c_iter; c_iter = llist_next(c_iter)) {
+    ch = llist_val(c_iter);
+    if (llist_is_empty(ch->recvq))
+      continue;
+
+    seq = ch->rcv_next;
+    pkt = llist_head(ch->recvq);
+    if (pkt->seq == ch->rcv_next)
+      return 1;
+    
+  }
+  return 0;
 }
 
 static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) { 
@@ -382,7 +463,7 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->ts_rel = ts_rel;
   pkt->ch = ch;
   insert_pkt(ch->recvq, pkt);
-  try_deliver(ctx, ch);
+/*  try_deliver(ctx, ch); */
   ch->finseq = seq1;
   return 0;
 }
@@ -499,7 +580,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   memcpy(pkt->payload, payload, length);
   if ((seq1 - ch->rcv_next) >= 0) {
     insert_pkt(ch->recvq, pkt);
-    try_deliver(ctx, ch);
+/*    try_deliver(ctx, ch); */
   }
   
   remote->sin_port = htons(ch->member->external_port);
@@ -1188,11 +1269,13 @@ int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
  * @return 0 if no next timer is found, 1 otherwise
  */
  
-int ghl_next_timer(struct timeval *tv) {
+int ghl_fill_tv(ghl_ctx_t *ctx, struct timeval *tv) {
   ghl_timer_t *next;
   int now = time(NULL);
   tv->tv_sec = 0;
   tv->tv_usec = 0;
+  if (can_deliver_one(ctx))
+    return 1;
   next = llist_head(timers);
   if (next) {
     tv->tv_sec = (next->when > now) ? ((next->when) - now) : 0;
@@ -1235,6 +1318,9 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
     }
   } while (stuff_to_do);
   
+  if (can_deliver_one(ctx))  
+    try_deliver_one(ctx);
+
   /* process network activity */
   if (fds == NULL) {
     fds = &myfds;
@@ -1244,7 +1330,7 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
       garena_errno = GARENA_ERR_INVALID;
       return -1;
     }
-    if (ghl_next_timer(&tv)) {
+    if (ghl_fill_tv(ctx, &tv)) {
       IFDEBUG(printf("[GHL/DEBUG] Going to sleep, wake-up on network activity or at next timer (%u secs)\n", tv.tv_sec));
       r = select(r+1, &myfds, NULL, NULL, &tv);
     } else { 

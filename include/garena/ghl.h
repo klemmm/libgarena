@@ -240,7 +240,7 @@ ghl_rh_t *ghl_room_from_id(ghl_ctx_t *ctx, unsigned int room_id);
 ghl_timer_t * ghl_new_timer(int when, ghl_timerfun_t *fun, void *privdata);
 void ghl_free_timer(ghl_timer_t *timer);
 
-int ghl_next_timer(struct timeval *tv);
+int ghl_fill_tv(ghl_ctx_t *, struct timeval *tv);
 ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
 int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int length);
