@@ -242,6 +242,7 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch);
 int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int length);
 ghl_ch_t *ghl_conn_from_id(ghl_rh_t *rh, unsigned int conn_id);
+unsigned int ghl_max_conn_pkt(unsigned int mtu);
 
 int ghl_init();
 void ghl_fini();

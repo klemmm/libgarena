@@ -10,6 +10,8 @@
 #include <garena/garena.h>
 #include <garena/ghl.h>
 #include <garena/util.h> 
+#include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <mhash.h>
 
 
@@ -1578,4 +1580,9 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
   insert_pkt(ch->sendq, pkt);
   xmit_packet(ctx, pkt);
   return 0;
+}
+
+inline unsigned int ghl_max_conn_pkt(unsigned int mtu) {
+  /* FIXME: should query path-MTU */
+  return (mtu - sizeof(struct ip) - sizeof(struct udphdr) - sizeof(gp2pp_conn_hdr_t));
 }

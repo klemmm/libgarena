@@ -35,6 +35,8 @@
 #define IP_OFFSET3 33
 
 
+#define MTU 1492
+
 typedef struct {
   int sock;
   int servsock;
@@ -1228,6 +1230,7 @@ int main(int argc, char **argv) {
   int as_root = 0;
   ghl_ch_t *ch;
   cell_t iter;
+  int max_conn_pkt;
   sockinfo_t *si;
   
   if (argc != 2) {
@@ -1261,6 +1264,7 @@ int main(int argc, char **argv) {
   roomlist = read_roomlist();
   garena_init();
   
+  max_conn_pkt = ghl_max_conn_pkt(MTU);
   screen_init(&screen);
 
   if (as_root)
@@ -1395,7 +1399,7 @@ int main(int argc, char **argv) {
             }
           } else if (si->state == SI_STATE_ESTABLISHED) {
             if (FD_ISSET(si->sock, &fds)) {
-              r = read(si->sock, buf, sizeof(buf));
+              r = read(si->sock, buf, max_conn_pkt);
               if (r > 0) {
                 ghl_conn_send(ctx, ch, buf, r);
               } else {
