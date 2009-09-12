@@ -1274,7 +1274,6 @@ int main(int argc, char **argv) {
   
   while(!quit) {
     if (need_free_ctx) {
-      ghl_free_ctx(ctx);
       ctx = NULL;
       need_free_ctx = 0;
     }

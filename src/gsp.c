@@ -153,6 +153,8 @@ int gsp_input(gsp_handtab_t *htab, char *buf, unsigned int length, unsigned char
     fprintf(deb, "[DEBUG/GSP] Unhandled message of type: %x (payload size = %x)\n", hdr->msgtype, ghtonl(*size & 0xFFFFFF));
     fflush(deb);
   } else {
+    fprintf(deb, "[DEBUG/GSP] Handled message of type: %x (payload size = %x)\n", hdr->msgtype, ghtonl(*size & 0xFFFFFF));
+    fflush(deb);
     
     if (htab->gsp_handlers[hdr->msgtype].fun(hdr->msgtype, plaintext + sizeof(gsp_hdr_t), length - sizeof(gsp_hdr_t), htab->gsp_handlers[hdr->msgtype].privdata) == -1) {
 /*       garena_perror("[WARN/GSP] Error while handling message"); */
@@ -288,7 +290,7 @@ int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, uns
 int gsp_send_hello(int sock, unsigned char *key, unsigned char *iv) {
   gsp_hello_t msg;
   memcpy(msg.country, "EN", 2);
-  msg.magic = ghtonl(GSP_HELLO_MAGIC);
+  msg.magic = ghtonl(GSP_CLIENT_VERSION);
   return gsp_output(sock, GSP_MSG_HELLO, (char*) &msg, sizeof(msg), key, iv);  
 }
 

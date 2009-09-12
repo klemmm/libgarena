@@ -7,7 +7,7 @@
 #include <garena/util.h>
 
 
-#define GHL_JOIN_WAIT 10
+#define GHL_JOIN_TIMEOUT 6
 
 
 #define GHL_EV_ME_JOIN 0
@@ -23,6 +23,7 @@
 #define GHL_EV_SERVCONN 11
 #define GHL_EV_NUM 12
 
+#define GHL_SERVCONN_TIMEOUT 6
 
 #define GHL_EV_RES_SUCCESS 0
 #define GHL_EV_RES_FAILURE -1
@@ -77,6 +78,7 @@ typedef struct ghl_ctx_s {
   int auth_ok;
   int lookup_ok;
   int connected;
+  int need_free;
   char md5pass[GSP_PWHASHSIZE >> 1];
   ghl_myinfo_t my_info;
   struct ghl_rh_s *room;
@@ -87,6 +89,7 @@ typedef struct ghl_ctx_s {
   ghl_timer_t *hello_timer;
   ghl_timer_t *conn_retrans_timer;
   ghl_timer_t *roominfo_timer;
+  ghl_timer_t *servconn_timeout;
   ihash_t roominfo;
 } ghl_ctx_t;
 

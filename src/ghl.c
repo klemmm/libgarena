@@ -64,6 +64,15 @@ static void send_hello_to_all(ghl_ctx_t *ctx) {
   }
 }
 
+static int handle_servconn_timeout(void *privdata) {
+  ghl_ctx_t *ctx = privdata;
+  ghl_servconn_t servconn;
+  servconn.result = GHL_EV_RES_FAILURE;
+  ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
+  ctx->servconn_timeout = NULL; /* prevent ghl_free_ctx from freeing the timer */
+  ctx->need_free = 1;
+  return 0;
+}
 
 static int do_conn_retrans(void *privdata) {
   ghl_ctx_t *ctx = privdata;
@@ -202,13 +211,18 @@ static int handle_auth(int type, void *payload, unsigned int length, void *privd
       }
 
       if ((ctx->connected = ctx->lookup_ok)) {
+        ghl_free_timer(ctx->servconn_timeout);
+        ctx->servconn_timeout = NULL;
         servconn.result = GHL_EV_RES_SUCCESS;
         ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
       }
       break;
     case GSP_MSG_AUTH_FAIL:
+      ghl_free_timer(ctx->servconn_timeout);
+      ctx->servconn_timeout = NULL;
       servconn.result = GHL_EV_RES_FAILURE;
       ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
+      ghl_free_ctx(ctx);
       break;
     default:
       garena_errno = GARENA_ERR_INVALID;
@@ -806,6 +820,7 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   ctx->roominfo_timer = NULL;
   ctx->conn_retrans_timer = NULL;
   ctx->auth_ok = 0;
+  ctx->need_free = 0;
   ctx->lookup_ok = 0;
   ctx->connected = 0;
   ctx->server_ip = server_ip;
@@ -961,6 +976,8 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     goto err;
   if ((ctx->roominfo_timer = ghl_new_timer(time(NULL) + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, ctx)) == NULL)
     goto err;
+  if ((ctx->servconn_timeout = ghl_new_timer(time(NULL) + GHL_SERVCONN_TIMEOUT, handle_servconn_timeout, ctx)) == NULL)
+    goto err;
     
   return ctx;
 
@@ -981,6 +998,8 @@ err:
     ghl_free_timer(ctx->conn_retrans_timer);
   if (ctx->roominfo_timer)
     ghl_free_timer(ctx->roominfo_timer);
+  if (ctx->servconn_timeout)
+    ghl_free_timer(ctx->servconn_timeout);
   if (ctx->roominfo)
     ihash_free_val(ctx->roominfo);
   free(ctx);
@@ -1056,7 +1075,7 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, unsigned int
   rh->got_members = 0;
   ctx->room = rh;
   fflush(deb);
-  rh->timeout = ghl_new_timer(time(NULL) + GHL_JOIN_WAIT, handle_room_join_timeout, rh);
+  rh->timeout = ghl_new_timer(time(NULL) + GHL_JOIN_TIMEOUT, handle_room_join_timeout, rh);
   return(rh);
 }
 
@@ -1204,6 +1223,11 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
           perror("[GHL/ERR] a timer was not handled correctly");
         }
         ghl_free_timer(cur);
+        if (ctx->need_free) {
+          garena_errno = GARENA_ERR_PROTOCOL;
+          ghl_free_ctx(ctx);
+          return -1;
+        }
         stuff_to_do=1;
         /* XXX FIXME */
         break;
@@ -1397,10 +1421,21 @@ void ghl_free_ctx(ghl_ctx_t *ctx) {
   if (ctx->room)
     ghl_free_room(ctx->room);
   close(ctx->peersock);
-  close(ctx->servsock);
+  if (ctx->servsock != -1)
+    close(ctx->servsock);
   free(ctx->gcrp_htab);
   free(ctx->gp2pp_htab);
   free(ctx->gsp_htab);
+  if (ctx->hello_timer)
+    ghl_free_timer(ctx->hello_timer);
+  if (ctx->conn_retrans_timer)
+    ghl_free_timer(ctx->conn_retrans_timer);
+  if (ctx->roominfo_timer)
+    ghl_free_timer(ctx->roominfo_timer);
+  if (ctx->servconn_timeout)
+    ghl_free_timer(ctx->servconn_timeout);
+  if (ctx->roominfo)
+    ihash_free_val(ctx->roominfo);
   free(ctx);
 }
 
