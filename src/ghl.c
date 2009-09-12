@@ -304,7 +304,7 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
   conn_incoming_ev.ch->rcv_next_deliver = 0;
-  conn_incoming_ev.ch->ts_ack = 0;
+  conn_incoming_ev.ch->ts_ack = time(NULL);
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
   conn_incoming_ev.ch->conn_id = ghtonl(initconn->conn_id);
   conn_incoming_ev.dport = ghtons(initconn->dport);
@@ -1566,7 +1566,7 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
   ch->snd_next = 0;
   ch->rcv_next = 0;
   ch->rcv_next_deliver = 0;
-  ch->ts_ack = 0;
+  ch->ts_ack = time(NULL);
   ch->conn_id = gp2pp_new_conn_id();
   llist_add_head(rh->conns, ch);
   

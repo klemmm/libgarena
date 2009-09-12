@@ -1409,7 +1409,7 @@ int process_input(fd_set *fds, fd_set *wfds) {
 
 void process_output(fd_set *fds, fd_set *wfds) {
   int r;
-  char buf[4096];
+  static char buf[4096];
   if (FD_ISSET(0, fds)) {
       r = screen_input(&screen, buf, sizeof(buf));
       if (r > 0) {
