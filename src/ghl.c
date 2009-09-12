@@ -371,6 +371,7 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   }
   if ((ch->cstate == GHL_CSTATE_CLOSING_OUT) || (ch->cstate == GHL_CSTATE_CLOSING_IN))
     return 0;
+  ch->cstate = GHL_CSTATE_CLOSING_IN;
 
   pkt = malloc(sizeof(ghl_ch_pkt_t));
   pkt->length = 0;
@@ -382,7 +383,6 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->ch = ch;
   insert_pkt(ch->recvq, pkt);
   try_deliver(ctx, ch);
-  ch->cstate = GHL_CSTATE_CLOSING_IN;
   ch->finseq = seq1;
   return 0;
 }
