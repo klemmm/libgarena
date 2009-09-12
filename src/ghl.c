@@ -106,6 +106,7 @@ static int do_conn_retrans(void *privdata) {
         break;
       }
       if ((pkt->xmit_ts + GP2PP_CONN_RETRANS_DELAY) <= now) {
+        fprintf(deb, "[GHL] Retransmitting packet, seq=%u\n", pkt->seq);
         xmit_packet(ctx, pkt);
         pkt->did_fast_retrans = 0;
         retrans++;
@@ -147,6 +148,8 @@ static void do_fast_retrans(ghl_ctx_t *ctx, llist_t sendq, int up_to) {
       break;
     if (pkt->did_fast_retrans == 0) {
       xmit_packet(ctx, pkt);
+        fprintf(deb, "[GHL] Fast-retransmitting packet, seq=%u\n", pkt->seq);
+      
       pkt->did_fast_retrans = 1;
     }
   }
@@ -497,6 +500,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
       todel = pkt;
     }
     if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
+     
       xmit_packet(ctx, pkt);
   }
   if (todel != NULL) {
@@ -574,7 +578,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->partial = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
-  if ((seq1 - ch->rcv_next) >= 0) {
+  if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_delivered) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
     insert_pkt(ch->recvq, pkt);
     update_next(ctx, ch); 
   }
@@ -1700,8 +1704,10 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
     ch->ts_ack = time(NULL);
   }
   insert_pkt(ch->sendq, pkt);
-  if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) 
+  if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) {
     xmit_packet(ctx, pkt);
+    fprintf(deb, "[GHL] Initial packet transmit: seq=%u\n", pkt->seq);
+  }
   return 0;
 }
 
