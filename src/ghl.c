@@ -75,8 +75,10 @@ static int do_conn_retrans(void *privdata) {
   int now = time(NULL);
   int retrans;
   
-  if (ctx->room == NULL)
+  if (ctx->room == NULL) {
+    ctx->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
     return 0;
+  }
   for (iter = llist_iter(rh->conns); iter; iter = llist_next(iter)) {
     if (todel) {
       llist_del_item(rh->conns, todel);
