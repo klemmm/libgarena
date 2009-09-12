@@ -109,7 +109,7 @@ static int do_conn_retrans(void *privdata) {
         }
         break;
       }
-      if ((ch->snd_una + GP2PP_MAX_IN_TRANSIT) < pkt->seq) {
+      if ((pkt->seq - ch->snd_una) > GP2PP_MAX_IN_TRANSIT) {
         fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
         fflush(deb);
         break;

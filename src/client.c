@@ -1208,6 +1208,8 @@ void handle_command(screen_ctx_t *screen, char *buf) {
 
 void handle_text(screen_ctx_t *screen, char *buf) {
   ghl_rh_t *rh = ctx ? ctx->room : NULL;
+  screen_output(screen, "wont handle text\n");
+  return;
   if (strlen(buf) == 0)
     return;
   if (rh && rh->joined) {
