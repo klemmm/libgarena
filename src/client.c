@@ -1,4 +1,4 @@
-#include <sys/types.h>
+  #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
@@ -37,6 +37,8 @@
 
 #define MTU 1492
 
+int tunmax;
+
 typedef struct {
   int sock;
   int servsock;
@@ -52,6 +54,7 @@ char fwdtun_name[IFNAMSIZ];
 int tun_fd, fwdtun_fd;
 
 
+unsigned int max_conn_pkt;
 unsigned int routing_host=INADDR_NONE;
 
 int quit = 0;
@@ -133,15 +136,9 @@ static llist_t read_roomlist() {
 }
 
 
-static unsigned int hash_func(hash_keytype id) {
- char *buf = (char*) &id;
- unsigned int i;
- unsigned int res = 0;
- for (i = 0; i < sizeof(hash_keytype); i++)
- {
-   res = res ^ buf[i];
- }
- return(res);
+static inline unsigned int hash_func(hash_keytype id) {
+  int i = (int)id;
+  return (i ^ (i >> 8) ^ (i >> 16) ^ (i >> 24));
 } 
 
 int hash_num(hash_t hash) {
@@ -359,18 +356,18 @@ int resolve(char *addr) {
 }     
 
 
-int ip_chksum(char *buffer, int length)
+int ip_chksum(char *buffer, int l)
 {
   u_short *w = (u_short *)buffer;
   int sum    = 0;
   u_short pad_val;
-  int pad = length % 2;
+  int pad = l % 2;
   if (pad) {
-    pad_val = buffer[length - 1];
+    pad_val = buffer[l - 1];
   }
    
-  length >>= 1;
-  while( length-- )
+  l >>= 1;
+  while( l-- )
     sum += *w++;   
   
   if (pad)
@@ -1207,8 +1204,6 @@ void handle_command(screen_ctx_t *screen, char *buf) {
 
 void handle_text(screen_ctx_t *screen, char *buf) {
   ghl_rh_t *rh = ctx ? ctx->room : NULL;
-  screen_output(screen, "wont handle text\n");
-  return;
   if (strlen(buf) == 0)
     return;
   if (rh && rh->joined) {
@@ -1218,22 +1213,268 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 
 
 
+int fill_fds_if_needed(ghl_ctx_t *ctx, fd_set *fds) {
+  fd_set wfds;
+  cell_t iter;
+  struct timeval tv;
+  sockinfo_t *si;
+  ghl_ch_t *ch;
+  int num_fd;
+  int r; 
+    if (ctx) {
+      if (ctx->room) {
+        num_fd = 0;
+        r = 0;
+        FD_ZERO(&wfds);
+        for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+          ch = llist_val(iter);
+          if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
+            si = hash_get(ch2sock, ch);
+            if (si->state == SI_STATE_ESTABLISHED) {
+              FD_SET(si->sock, &wfds);
+              num_fd++;
+              if (r < si->sock)
+                r = si->sock;
+            }
+          }
+        }
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+        r = select(r+1, NULL, &wfds, NULL, &tv);
+        if (r == num_fd) {
+          r = ghl_fill_fds(ctx, fds);
+        } else {
+          r = 0;
+        }
+      } else r = ghl_fill_fds(ctx, fds);
+    } else r = 0;
+  return r;   
+}
+
+int fill_conn_fds(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds, int r) {
+  cell_t iter;
+  ghl_ch_t *ch;
+  sockinfo_t *si;
+    if (ctx && ctx->room)
+      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+        ch = llist_val(iter);
+        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
+          si = hash_get(ch2sock, ch);
+          if (si->state == SI_STATE_CONNECTING) {
+            FD_SET(si->sock, wfds);
+            if (si->sock > r)
+              r = si->sock;
+
+          } else if (si->state == SI_STATE_ESTABLISHED) {
+            FD_SET(si->sock, fds);
+            if (si->sock > r)
+              r = si->sock;
+
+          } else if (si->state == SI_STATE_ACCEPTING) {
+            FD_SET(si->servsock, fds);
+            if (si->servsock > r)
+              r = si->servsock;
+
+          }
+        }
+      }
+  return r;
+}
+int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
+
+  cell_t iter;
+  ghl_ch_t *ch;
+  sockinfo_t *si;
+  int dummy_size;
+  struct sockaddr_in dummy;
+  char buf[4096];
+  int r;
+  
+    if (ctx && ctx->room)
+      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+        ch = llist_val(iter);
+        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
+          si = hash_get(ch2sock, ch);
+          if (si->state == SI_STATE_ACCEPTING) {
+            if (FD_ISSET(si->servsock, fds)) {
+              dummy_size = sizeof(dummy);
+              if ((r = accept(si->servsock, (struct sockaddr *)&dummy, &dummy_size)) == -1) {
+                /* the accept failed */
+  fprintf(deb, "freeing SI because the accept failed, connid:  %x\n", ch->conn_id);
+  fflush(deb);
+                
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+                
+                free(si);
+              } else {
+                si->sock = r;
+                set_nonblock(si->sock);
+                si->state = SI_STATE_ESTABLISHED;
+                if (si->servsock != -1) {
+                  close(si->servsock);
+                  si->servsock = -1;
+                }
+              }
+            }
+          } else if (si->state == SI_STATE_CONNECTING) {
+            if (FD_ISSET(si->sock, wfds)) {
+              dummy_size = sizeof(dummy);
+              if (getpeername(si->sock, (struct sockaddr *)&dummy, &dummy_size) == -1) {
+                /* close */
+                fprintf(deb, "freeing SI because the connect failed,: %x\n", si->ch->conn_id);
+                fflush(deb);
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+              
+                free(si);
+              } else {
+                /* ok */
+                si->state = SI_STATE_ESTABLISHED;
+              }
+            }
+          } else if (si->state == SI_STATE_ESTABLISHED) {
+            if (FD_ISSET(si->sock, fds)) {
+              r = read(si->sock, buf, max_conn_pkt);
+              if (r > 0) {
+                ghl_conn_send(ctx, ch, buf, r);
+              } else {
+              fprintf(deb, "freeing SI because normal close: %x\n", si->ch->conn_id);
+              fflush(deb);
+                ghl_conn_close(ctx, ch);
+                if (si->sock != -1)
+                  close(si->sock);
+                if (si->servsock != -1)
+                  close(si->servsock);
+                llist_del_item(socklist, si);
+                hash_del(ch2sock, ch);
+  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
+  fflush(deb);
+                
+                free(si);
+              }
+            }
+          }
+        }
+      }
+  
+}
+
+
+
+int prepare_fds(fd_set *fds, fd_set *wfds) {
+  int r;
+    
+    r = fill_fds_if_needed(ctx, fds);
+    
+    r = fill_conn_fds(ctx, fds, wfds, r);
+
+   return r; 
+
+}
+
+
+int process_input(fd_set *fds, fd_set *wfds) {
+  int r;
+  int has_timer;
+  struct timeval tv;
+  char buf[4096];
+  int filled_fds;
+  
+    
+    r = prepare_fds(fds, wfds);
+    has_timer = ctx ? ghl_fill_tv(ctx, &tv) : 0;
+    
+    if (has_timer) {
+      r = select(MAX(r,tunmax)+1, fds, wfds, NULL, &tv);
+    } else {
+      r = select(MAX(r,tunmax)+1, fds, wfds, NULL, NULL);
+    }
+  return r;
+}
+
+void process_output(fd_set *fds, fd_set *wfds) {
+  int r;
+  char buf[4096];
+  if (FD_ISSET(0, fds)) {
+      r = screen_input(&screen, buf, sizeof(buf));
+      if (r > 0) {
+        if (buf[0] == '/') {
+          handle_command(&screen, buf + 1);
+        } else {
+          handle_text(&screen, buf);
+        }
+      }
+  }
+
+  handle_connections(ctx, fds, wfds);
+
+
+  if (FD_ISSET(tun_fd, fds)) {
+      ghl_rh_t *rh = ctx ? ctx->room : NULL;
+      handle_tunnel(ctx, rh);
+  }
+  if (FD_ISSET(fwdtun_fd, fds)) {
+      ghl_rh_t *rh = ctx ? ctx->room : NULL;
+      handle_fwd_tunnel(rh);
+  }
+    
+  if (ctx) {
+      ghl_process(ctx, fds);
+  }
+
+}
+
+void client_loop() {
+  int r;
+  fd_set fds, wfds;
+  fd_set i_fds, i_wfds;
+  tunmax = MAX(tun_fd, fwdtun_fd);
+  FD_ZERO(&i_fds);
+  FD_ZERO(&i_wfds);
+  FD_SET(tun_fd, &i_fds);
+  FD_SET(fwdtun_fd, &i_fds);
+  FD_SET(0, &i_fds);
+
+  while(!quit) {
+  if (need_free_ctx) {
+      ctx = NULL;
+      need_free_ctx = 0;
+    }
+    fds = i_fds;
+    wfds = i_wfds;
+    r = process_input(&fds, &wfds);
+    
+    if (r == -1) {
+      if ((errno == EINTR) || (errno == EAGAIN))
+        continue;
+      fprintf(deb, "select: %s", strerror(errno));
+      fflush(deb);
+      exit(-1);
+    }
+    process_output(&fds, &wfds);
+  }
+}
 
 int main(int argc, char **argv) {
   /* debut du code execute en root */
-  fd_set fds, wfds;
-  char buf[4096];
-  struct sockaddr_in dummy;
-  unsigned int dummy_size;
-  int tunmax;
-  struct timeval tv;
-  int r;
   int as_root = 0;
   ghl_ch_t *ch;
   cell_t iter;
-  int max_conn_pkt;
-  sockinfo_t *si;
-  int has_timer;
   
   if (argc != 2) {
     printf("usage: %s <tunnel interface to use>\n", argv[0]);
@@ -1274,161 +1515,7 @@ int main(int argc, char **argv) {
   ch2sock = hash_init();
   socklist = llist_alloc();
   
-  while(!quit) {
-    if (need_free_ctx) {
-      ctx = NULL;
-      need_free_ctx = 0;
-    }
-    FD_ZERO(&fds);
-    FD_ZERO(&wfds);
-    r = ctx ? ghl_fill_fds(ctx, &fds) : 0;
-    FD_SET(tun_fd, &fds);
-    FD_SET(fwdtun_fd, &fds);
-    tunmax = MAX(tun_fd, fwdtun_fd);
-    FD_SET(0, &fds);
-    if (ctx && ctx->room)
-      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
-        ch = llist_val(iter);
-        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
-          si = hash_get(ch2sock, ch);
-          if (si->state == SI_STATE_CONNECTING) {
-            FD_SET(si->sock, &wfds);
-            if (si->sock > r)
-              r = si->sock;
-
-          } else if (si->state == SI_STATE_ESTABLISHED) {
-            FD_SET(si->sock, &fds);
-            if (si->sock > r)
-              r = si->sock;
-
-          } else if (si->state == SI_STATE_ACCEPTING) {
-            FD_SET(si->servsock, &fds);
-            if (si->servsock > r)
-              r = si->servsock;
-
-          }
-        }
-      }
-    
-    has_timer = ctx ? ghl_fill_tv(ctx, &tv) : 0;
-    
-    if (has_timer) {
-      r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, &tv);
-    } else {
-      r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, NULL);
-    }
-
-    if (r == -1) {
-      if ((errno == EINTR) || (errno == EAGAIN))
-        continue;
-      fprintf(deb, "select: %s", strerror(errno));
-      fflush(deb);
-      exit(-1);
-    }
-    if (FD_ISSET(0, &fds)) {
-      r = screen_input(&screen, buf, sizeof(buf));
-      if (r > 0) {
-        if (buf[0] == '/') {
-          handle_command(&screen, buf + 1);
-        } else {
-          handle_text(&screen, buf);
-        }
-      }
-    }
-    if (FD_ISSET(tun_fd, &fds)) {
-      ghl_rh_t *rh = ctx ? ctx->room : NULL;
-      handle_tunnel(ctx, rh);
-    }
-    if (FD_ISSET(fwdtun_fd, &fds)) {
-      ghl_rh_t *rh = ctx ? ctx->room : NULL;
-      handle_fwd_tunnel(rh);
-    }
-    
-    if (ctx && ctx->room)
-      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
-        ch = llist_val(iter);
-        if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
-          si = hash_get(ch2sock, ch);
-          if (si->state == SI_STATE_ACCEPTING) {
-            if (FD_ISSET(si->servsock, &fds)) {
-              dummy_size = sizeof(dummy);
-              if ((r = accept(si->servsock, (struct sockaddr *)&dummy, &dummy_size)) == -1) {
-                /* the accept failed */
-  fprintf(deb, "freeing SI because the accept failed, connid:  %x\n", ch->conn_id);
-  fflush(deb);
-                
-                ghl_conn_close(ctx, ch);
-                if (si->sock != -1)
-                  close(si->sock);
-                if (si->servsock != -1)
-                  close(si->servsock);
-                llist_del_item(socklist, si);
-                hash_del(ch2sock, ch);
-  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
-  fflush(deb);
-                
-                free(si);
-              } else {
-                si->sock = r;
-                set_nonblock(si->sock);
-                si->state = SI_STATE_ESTABLISHED;
-                if (si->servsock != -1) {
-                  close(si->servsock);
-                  si->servsock = -1;
-                }
-              }
-            }
-          } else if (si->state == SI_STATE_CONNECTING) {
-            if (FD_ISSET(si->sock, &wfds)) {
-              dummy_size = sizeof(dummy);
-              if (getpeername(si->sock, (struct sockaddr *)&dummy, &dummy_size) == -1) {
-                /* close */
-                fprintf(deb, "freeing SI because the connect failed,: %x\n", si->ch->conn_id);
-                fflush(deb);
-                ghl_conn_close(ctx, ch);
-                if (si->sock != -1)
-                  close(si->sock);
-                if (si->servsock != -1)
-                  close(si->servsock);
-                llist_del_item(socklist, si);
-                hash_del(ch2sock, ch);
-  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
-  fflush(deb);
-              
-                free(si);
-              } else {
-                /* ok */
-                si->state = SI_STATE_ESTABLISHED;
-              }
-            }
-          } else if (si->state == SI_STATE_ESTABLISHED) {
-            if (FD_ISSET(si->sock, &fds)) {
-              r = read(si->sock, buf, max_conn_pkt);
-              if (r > 0) {
-                ghl_conn_send(ctx, ch, buf, r);
-              } else {
-              fprintf(deb, "freeing SI because normal close: %x\n", si->ch->conn_id);
-              fflush(deb);
-                ghl_conn_close(ctx, ch);
-                if (si->sock != -1)
-                  close(si->sock);
-                if (si->servsock != -1)
-                  close(si->servsock);
-                llist_del_item(socklist, si);
-                hash_del(ch2sock, ch);
-  fprintf(deb, "freeing SI associated w/ %x\n", si->ch->conn_id);
-  fflush(deb);
-                
-                free(si);
-              }
-            }
-          }
-        }
-      }
-    if (ctx) 
-      ghl_process(ctx, &fds);
-
-  }
+  client_loop();
   
   llist_free_val(socklist);  
   hash_free(ch2sock);

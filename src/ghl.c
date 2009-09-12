@@ -326,8 +326,9 @@ static void update_next(ghl_ctx_t *ctx, ghl_ch_t *ch) {
     pkt = llist_val(iter);
     if (pkt->seq > ch->rcv_next)
       break;
-    if (pkt->seq == ch->rcv_next)
+    if (pkt->seq == ch->rcv_next) {
       ch->rcv_next++;
+    }
   }
 }
 
@@ -353,9 +354,19 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
     ch = llist_val(c_iter);
     if (llist_is_empty(ch->recvq))
       continue;
-    seq = ch->rcv_next_deliver;
-    pkt = llist_head(ch->recvq);
-    if (pkt->seq == ch->rcv_next_deliver) {
+
+    todel = NULL;
+    for (iter = llist_iter(ch->recvq); iter ; iter = llist_next(iter)) {
+      pkt = llist_val(iter);
+      if (todel) {
+        llist_del_item(ch->recvq, todel);
+        free(todel->payload);
+        free(todel);
+        todel = NULL;
+      }
+      if (pkt->seq != ch->rcv_next_deliver)
+        break;
+        
       if (pkt->length > 0) {
         conn_recv_ev.ch = ch;
         conn_recv_ev.payload = pkt->payload;
@@ -364,13 +375,11 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
            r = ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
         }
+            
         if (r == pkt->length) {
-          llist_del_item(ch->recvq, pkt);
-          free(pkt->payload);
-          free(pkt);
+          todel = pkt;
           ch->rcv_next_deliver++;
         } else if (r != -1) {
-/*          fprintf(deb, "partial receive\n"); */
           memmove(pkt->payload, pkt->payload + r, pkt->length - r);
           pkt->length -= r;
         }
@@ -380,12 +389,15 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
           ch->cstate = GHL_CSTATE_CLOSING_OUT;
           ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
         }
-        llist_del_item(ch->recvq, pkt);
-        free(pkt->payload);
-        free(pkt);
+        todel = pkt;
         ch->rcv_next_deliver++;
       }
-      break;
+    }
+    if (todel) {
+        llist_del_item(ch->recvq, todel);
+        free(todel->payload);
+        free(todel);
+        todel = NULL;
     }
   }
 }
@@ -1273,8 +1285,6 @@ int ghl_fill_tv(ghl_ctx_t *ctx, struct timeval *tv) {
   int now = time(NULL);
   tv->tv_sec = 0;
   tv->tv_usec = 0;
-  if (can_deliver_one(ctx))
-    return 1;
   next = llist_head(timers);
   if (next) {
     tv->tv_sec = (next->when > now) ? ((next->when) - now) : 0;
@@ -1317,8 +1327,6 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
     }
   } while (stuff_to_do);
   
-  if (can_deliver_one(ctx))  
-    try_deliver_one(ctx);
 
   /* process network activity */
   if (fds == NULL) {
@@ -1375,6 +1383,8 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
       ctx->servsock = -1;
     }
   }
+  try_deliver_one(ctx);
+
   return 0;
 }
 
