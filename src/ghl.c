@@ -300,6 +300,7 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   conn_incoming_ev.ch->ctx = ctx;
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
+  conn_incoming_ev.ch->rcv_next_deliver = 0;
   conn_incoming_ev.ch->ts_ack = 0;
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
   conn_incoming_ev.ch->conn_id = ghtonl(initconn->conn_id);
@@ -309,13 +310,12 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   return 0;
 }
 
-static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
+static void update_next(ghl_ctx_t *ctx, ghl_ch_t *ch) {
   int seq;
   cell_t iter;
   ghl_conn_recv_t conn_recv_ev;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
-  ghl_ch_pkt_t *todel = NULL;
   
   if (llist_is_empty(ch->recvq))
     return;
@@ -324,35 +324,8 @@ static void try_deliver(ghl_ctx_t *ctx, ghl_ch_t *ch) {
     pkt = llist_val(iter);
     if (pkt->seq != seq)
       break;
-      if (pkt->length > 0) {
-        conn_recv_ev.ch = ch;
-        conn_recv_ev.payload = pkt->payload;
-        conn_recv_ev.length = pkt->length;
-        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-           ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
-        }
-      } else {
-        conn_fin_ev.ch = ch;
-        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-          ch->cstate = GHL_CSTATE_CLOSING_OUT;
-          ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
-        }
-      }
-      if (todel) {
-        llist_del_item(ch->recvq, todel);
-        free(todel->payload);
-        free(todel);
-        todel = NULL;
-      }
-      todel = pkt;
   }
   ch->rcv_next = seq;
-  if (todel) {
-    llist_del_item(ch->recvq, todel);
-    free(todel->payload);
-    free(todel);
-  }
-
 }
 
 static void try_deliver_one(ghl_ctx_t *ctx) {
@@ -364,7 +337,8 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
   ghl_ch_pkt_t *pkt;
   ghl_ch_pkt_t *todel = NULL;
   ghl_ch_t *ch = NULL;
-
+  int r;
+  
   if (ctx->room == NULL)
     return;
     
@@ -376,30 +350,36 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
     ch = llist_val(c_iter);
     if (llist_is_empty(ch->recvq))
       continue;
-    seq = ch->rcv_next;
+    seq = ch->rcv_next_deliver;
     pkt = llist_head(ch->recvq);
-    if (pkt->seq == ch->rcv_next) {
+    if (pkt->seq == ch->rcv_next_deliver) {
       if (pkt->length > 0) {
         conn_recv_ev.ch = ch;
         conn_recv_ev.payload = pkt->payload;
         conn_recv_ev.length = pkt->length;
+        r = 0;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-           ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
+           r = ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
         }
+        if (r == 0) {
+          llist_del_item(ch->recvq, pkt);
+          free(pkt->payload);
+          free(pkt);
+          ch->rcv_next_deliver++;
+        } else fprintf(deb, "receive error\n");
       } else {
         conn_fin_ev.ch = ch;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
           ch->cstate = GHL_CSTATE_CLOSING_OUT;
           ghl_signal_event(ctx, GHL_EV_CONN_FIN, &conn_fin_ev);
         }
+        llist_del_item(ch->recvq, pkt);
+        free(pkt->payload);
+        free(pkt);
+        ch->rcv_next_deliver++;
       }
-      llist_del_item(ch->recvq, pkt);
-      free(pkt->payload);
-      free(pkt);
-      ch->rcv_next++;
       break;
     }
-    
   }
 }
 
@@ -425,9 +405,9 @@ static int can_deliver_one(ghl_ctx_t *ctx) {
     if (llist_is_empty(ch->recvq))
       continue;
 
-    seq = ch->rcv_next;
+    seq = ch->rcv_next_deliver;
     pkt = llist_head(ch->recvq);
-    if (pkt->seq == ch->rcv_next)
+    if (pkt->seq == ch->rcv_next_deliver)
       return 1;
     
   }
@@ -465,7 +445,7 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->ts_rel = ts_rel;
   pkt->ch = ch;
   insert_pkt(ch->recvq, pkt);
-/*  try_deliver(ctx, ch); */
+    update_next(ctx, ch);
   ch->finseq = seq1;
   return 0;
 }
@@ -482,6 +462,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
+  fprintf(deb, "[%x] ACK, this_ack=%u next_expected=%u\n", conn_id, seq1, seq2);
   ch = ghl_conn_from_id(rh, conn_id);
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -495,6 +476,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
   } else {
     fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
   }
+  
   
   for (iter=llist_iter(ch->sendq); iter; iter = llist_next(iter)) {
     if (todel != NULL) { 
@@ -530,6 +512,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
     return -1;
   }
   ch = ghl_conn_from_id(rh, conn_id);
+  fprintf(deb, "[%x] DATA, this_seq=%u next_expected=%u\n", conn_id, seq1, seq2);
     
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -583,7 +566,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   memcpy(pkt->payload, payload, length);
   if ((seq1 - ch->rcv_next) >= 0) {
     insert_pkt(ch->recvq, pkt);
-/*    try_deliver(ctx, ch); */
+    update_next(ctx, ch); 
   }
   
   remote->sin_port = htons(ch->member->external_port);
@@ -1559,6 +1542,7 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
   ch->snd_una = 0;
   ch->snd_next = 0;
   ch->rcv_next = 0;
+  ch->rcv_next_deliver = 0;
   ch->ts_ack = 0;
   ch->conn_id = gp2pp_new_conn_id();
   llist_add_head(rh->conns, ch);

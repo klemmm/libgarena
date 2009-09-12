@@ -1314,7 +1314,6 @@ int main(int argc, char **argv) {
     
     has_timer = ctx ? ghl_fill_tv(ctx, &tv) : 0;
     
-    usleep(10000);
     if (has_timer) {
       r = select(MAX(r,tunmax)+1, &fds, &wfds, NULL, &tv);
     } else {
@@ -1373,6 +1372,7 @@ int main(int argc, char **argv) {
                 free(si);
               } else {
                 si->sock = r;
+                set_nonblock(si->sock);
                 si->state = SI_STATE_ESTABLISHED;
                 if (si->servsock != -1) {
                   close(si->servsock);

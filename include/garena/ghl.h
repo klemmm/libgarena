@@ -164,7 +164,7 @@ typedef struct {
 typedef struct ghl_ch_s {
   unsigned int conn_id;
   int ts_base;
-  int snd_una, snd_next, rcv_next;
+  int snd_una, snd_next, rcv_next, rcv_next_deliver;
   llist_t sendq;
   llist_t recvq;
 #define GHL_CSTATE_ESTABLISHED 2
