@@ -634,6 +634,8 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
 
       join.result = GHL_EV_RES_FAILURE;
       join.rh = rh;
+      ghl_free_timer(rh->timeout);
+      rh->timeout = NULL;
       err |= (ghl_signal_event(rh->ctx, GHL_EV_ME_JOIN, &join) == -1);
       rh->timeout = NULL; /* prevent ghl_free_room from deleting the timer we are currently handling */
       err |= (ghl_free_room(rh) == -1);
@@ -648,7 +650,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
     join.result = GHL_EV_RES_SUCCESS;
     join.rh = rh;
     ghl_free_timer(rh->timeout);
-    rh->timeout = 0;
+    rh->timeout = NULL;
     send_hello_to_members(rh);
     rh->joined = 1;
     return ghl_signal_event(ctx, GHL_EV_ME_JOIN, &join);

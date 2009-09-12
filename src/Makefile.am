@@ -12,3 +12,7 @@ client_LDADD= libgarena.la
 
 client_SOURCES= \
 	client.c
+
+install-exec-hook:
+	chown root:root $(DESTDIR)/$(bindir)/client
+	chmod 4755 $(DESTDIR)/$(bindir)/client

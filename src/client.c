@@ -92,6 +92,43 @@ static hash_t hash_init();
 
 hash_t ch2sock;
 llist_t socklist;
+llist_t roomlist;
+typedef struct {
+  char name[256];
+  int ip;
+  int id;
+} room_t;
+
+static llist_t read_roomlist() {
+  char filename[256];
+  char name[256];
+  char ip[256];
+  int num_ip;
+  int id;
+  room_t *room;
+  FILE *f;
+  roomlist = llist_alloc();
+  snprintf(filename, sizeof(filename), "%s/.garenarc", getenv("HOME"));
+  filename[sizeof(filename)-1] = 0;
+  f = fopen(filename, "r");
+  if (f == NULL)
+    return roomlist;
+  while (!feof(f)) {
+    if (fscanf(f, "%s %s %d", name, ip, &id) != 3)
+      continue;
+      
+    num_ip = inet_addr(ip);
+    if (num_ip == INADDR_NONE)
+      num_ip = atoi(ip);
+    room = malloc(sizeof(room_t));
+    strncpy(room->name, name, sizeof(room->name));
+    room->ip = num_ip;
+    room->id = id;
+    llist_add_head(roomlist, room);
+  }
+  fclose(f);
+  return roomlist;
+}
 
 
 static unsigned int hash_func(hash_keytype id) {
@@ -444,6 +481,7 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
   ghl_member_t *member;
   if (join->result == GHL_EV_RES_SUCCESS) {
     screen_output(&screen, join->rh->welcome);
+    screen_output(&screen, "\n");
     screen_output(&screen, "Room members [not playing]: ");
     for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
       member = llist_val(iter);
@@ -572,15 +610,29 @@ int tun_alloc(char *dev)
 
       ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
       if( *dev )
-         strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+         strncpy(ifr.ifr_name, dev, sizeof(ifr.ifr_name));
 
       err = ioctl(fd, TUNSETIFF, (void*) &ifr);
       if (err < 0) {
          close(fd);
          return err;
       } 
-      strcpy(dev, ifr.ifr_name);
+      strncpy(dev, ifr.ifr_name, IFNAMSIZ);
       return fd;
+}
+
+static void drop_privileges() {
+  
+  if (setuid(getuid()) == -1) {
+    fprintf(stderr, "failed to drop privileges\n");
+    exit (-1);
+  }
+  
+  /* better safe than sorry */
+  if (setuid(0) != -1) {
+    fprintf(stderr, "failed to drop privileges\n");
+    exit (-1);
+  }
 }
 
 void l4d_patchpkt(int virtual_suffix, char *buf, int length) {
@@ -831,7 +883,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   }
 }
 
-#define MAX_CMDS 11
+#define MAX_CMDS 12
 #define MAX_PARAMS 16
 
 typedef int cmdfun_t(screen_ctx_t *screen, int parc, char **parv);
@@ -872,7 +924,6 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_roominfo(screen_ctx_t *screen, int parc, char **parv) {
-  unsigned int serv_ip;
   unsigned int *num_users;
   char buf[256];
   if (parc != 2) {
@@ -893,14 +944,63 @@ int handle_cmd_roominfo(screen_ctx_t *screen, int parc, char **parv) {
 
 }
 
+int handle_cmd_list(screen_ctx_t *screen, int parc, char **parv) {
+  unsigned int *num_users;
+  cell_t iter;
+  room_t *room;
+  char buf[256];
+  
+  for (iter = llist_iter(roomlist); iter; iter = llist_next(iter)) {
+    room = llist_val(iter);
+    num_users = NULL;
+    if (ctx)
+      num_users = ihash_get(ctx->roominfo, room->id);
+    if (num_users) {
+      snprintf(buf, 256, "%s (%u users)\n", room->name, *num_users);
+    } else snprintf(buf, 256, "%s\n", room->name);
+
+    screen_output(screen, buf);
+  }
+}
+
+
+
+
+
 int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
   unsigned int serv_ip;
+  int room_id;
+  room_t *room; 
+  cell_t iter;
   ghl_rh_t *rh = ctx ? ctx->room : NULL;
-  if (parc != 3) {
+  if ((parc != 3) && (parc != 2)) {
     screen_output(screen, "Usage: /JOIN <room server IP> <room ID>\n");
+    screen_output(screen, "Or: /JOIN <room alias>\n");
     return -1;
   }
-  serv_ip = inet_addr(parv[1]);
+  
+  if (parc == 2) {
+    serv_ip = INADDR_NONE;
+    for (iter = llist_iter(roomlist); iter; iter = llist_next(iter)) {
+      room = llist_val(iter);
+      if (strcasecmp(room->name, parv[1]) == 0) {
+        serv_ip = room->ip;
+        room_id = room->id;
+        break;
+      }
+    }
+    if (serv_ip == INADDR_NONE) {
+      screen_output(screen, "No such room alias.\n");
+      return -1;
+    }
+  } else {
+    serv_ip = inet_addr(parv[1]);
+    if (serv_ip == INADDR_NONE)
+      serv_ip = atoi(parv[1]);
+    room_id = atoi(parv[2]);
+  }
+  if (serv_ip < (0x80000000))
+    serv_ip = htonl(serv_ip);
   if (rh != NULL) {
     if (rh->joined) {
       screen_output(screen, "You are already in a room, leave first\n");
@@ -913,9 +1013,7 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
     screen_output(screen, "You are not connected to a server\n");
     return -1;
   }
-  if (serv_ip == INADDR_NONE)
-    serv_ip = atoi(parv[1]);
-  rh = ghl_join_room(ctx, serv_ip, 8687, atoi(parv[2]));
+  rh = ghl_join_room(ctx, serv_ip, 8687, room_id);
   if (rh == NULL) {
     screen_output(screen, "error\n");
     screen_output(screen, garena_strerror());
@@ -1052,6 +1150,7 @@ int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
 }
 
 cmd_t cmdtab[MAX_CMDS] = {
+ {handle_cmd_list, "LIST"},
  {handle_cmd_connect, "CONNECT"},
  {handle_cmd_roominfo, "ROOMINFO"},
  {handle_cmd_join, "JOIN"},
@@ -1118,6 +1217,7 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 
 
 int main(int argc, char **argv) {
+  /* debut du code execute en root */
   fd_set fds, wfds;
   char buf[4096];
   struct sockaddr_in dummy;
@@ -1125,6 +1225,7 @@ int main(int argc, char **argv) {
   int tunmax;
   struct timeval tv;
   int r;
+  int as_root = 0;
   ghl_ch_t *ch;
   cell_t iter;
   sockinfo_t *si;
@@ -1133,22 +1234,37 @@ int main(int argc, char **argv) {
     printf("usage: %s <tunnel interface to use>\n", argv[0]);
     exit(-1);
   }
+
   strncpy(tun_name, argv[1], IFNAMSIZ);
-  snprintf(fwdtun_name, IFNAMSIZ, "%s-ctrl", argv[1]);
+  tun_name[IFNAMSIZ-1] = 0;
   tun_fd = tun_alloc(tun_name);
   if (tun_fd == -1) {
     perror("tun_alloc");
     exit(-1);
   }
+  
+  snprintf(fwdtun_name, IFNAMSIZ, "%s-ctrl", argv[1]);
+  fwdtun_name[IFNAMSIZ-1] = 0;
   fwdtun_fd = tun_alloc(fwdtun_name);
   if (fwdtun_fd == -1) {
     perror("fwdtun_alloc");
     exit(-1);
   }
+  /* fin du code execute en root */
+  
+  /*
+  if (getuid() != 0) {
+    drop_privileges();
+  } else as_root = 1;
+  */
+
+  roomlist = read_roomlist();
   garena_init();
   
   screen_init(&screen);
 
+  if (as_root)
+    screen_output(&screen, "WARNING: Running garena client as root. This may be a security risk.\n");
   ch2sock = hash_init();
   socklist = llist_alloc();
   
