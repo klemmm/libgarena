@@ -447,20 +447,17 @@ int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
 
 int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   char *buf;
+  int r;
   ghl_conn_recv_t *conn_recv = event_param;
   ghl_ch_t *ch = conn_recv->ch;
   int sock;
   sockinfo_t *si;
   buf = malloc(conn_recv->length);
-  memcpy(buf, conn_recv->payload, conn_recv->length);
+  memcpy(buf, conn_recv->payload, conn_recv->length );
   si = hash_get(ch2sock, ch);
   sock = si->sock;
-  if ((sock != 0) && (write(sock, buf, conn_recv->length) != -1)) {
-    free(buf);
-    return 0;
-  } 
-  free(buf);
-  return -1;
+  r= write(sock, buf, conn_recv->length);
+  return r;
 }
 
 int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {

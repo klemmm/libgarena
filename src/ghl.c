@@ -320,10 +320,12 @@ static void update_next(ghl_ctx_t *ctx, ghl_ch_t *ch) {
   if (llist_is_empty(ch->recvq))
     return;
    
-  for (seq = ch->rcv_next, iter = llist_iter(ch->recvq); iter; iter = llist_next(iter), seq++) {
+  for (iter = llist_iter(ch->recvq); iter; iter = llist_next(iter)) {
     pkt = llist_val(iter);
-    if (pkt->seq != seq)
+    if (pkt->seq > ch->rcv_next)
       break;
+    if (pkt->seq == ch->rcv_next)
+      ch->rcv_next++;
   }
   ch->rcv_next = seq;
 }
@@ -357,16 +359,22 @@ static void try_deliver_one(ghl_ctx_t *ctx) {
         conn_recv_ev.ch = ch;
         conn_recv_ev.payload = pkt->payload;
         conn_recv_ev.length = pkt->length;
-        r = 0;
+        r = pkt->length;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
            r = ghl_signal_event(ctx, GHL_EV_CONN_RECV, &conn_recv_ev);
         }
-        if (r == 0) {
+        if (r == pkt->length) {
           llist_del_item(ch->recvq, pkt);
           free(pkt->payload);
           free(pkt);
           ch->rcv_next_deliver++;
-        } else fprintf(deb, "receive error\n");
+        } else if (r == -1) {
+          fprintf(deb, "receive error\n");
+        } else {
+          fprintf(deb, "partial receive\n");
+          memmove(pkt->payload, pkt->payload + r, pkt->length - r);
+          pkt->length -= r;
+        }
       } else {
         conn_fin_ev.ch = ch;
         if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
@@ -440,6 +448,7 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->length = 0;
   pkt->did_fast_retrans = 0;
   pkt->xmit_ts = 0;
+  pkt->partial = 0;
   pkt->payload = NULL;
   pkt->seq = ch->rcv_next; /* wtf is this crappy protocol, the FIN packet does not have a sequence number */
   pkt->ts_rel = ts_rel;
@@ -562,6 +571,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->ts_rel = ts_rel;
   pkt->ch = ch;
   pkt->xmit_ts = 0;
+  pkt->partial = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   if ((seq1 - ch->rcv_next) >= 0) {
@@ -1680,6 +1690,7 @@ int ghl_conn_send(ghl_ctx_t *ctx, ghl_ch_t *ch, char *payload, unsigned int leng
   pkt->ts_rel = (now - ch->ts_base);
   pkt->ch = ch;
   pkt->xmit_ts = 0;
+  pkt->partial = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   
