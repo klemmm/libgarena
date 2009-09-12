@@ -171,6 +171,7 @@ typedef struct ghl_ch_s {
 #define GHL_CSTATE_CLOSING_IN 3
 #define GHL_CSTATE_CLOSING_OUT 4
   int cstate;
+  int ts_ack;
   ghl_ctx_t *ctx;
   ghl_member_t *member;
   int finseq;
@@ -183,7 +184,6 @@ typedef struct {
   int seq;
   int did_fast_retrans;
   int xmit_ts;
-  int create_ts;
   char *payload;
 } ghl_ch_pkt_t;
 
