@@ -90,7 +90,16 @@ struct gp2pp_hello_req_s {
 } __attribute__ ((packed));
 typedef struct gp2pp_hello_req_s gp2pp_hello_req_t;
 
+struct gp2pp_room_usernum_s {
+  uint8_t suffix;
+  uint8_t num_users;
+} __attribute__ ((packed));
+typedef struct gp2pp_room_usernum_s gp2pp_room_usernum_t;
+
 struct gp2pp_roominfo_reply_s {
+  uint16_t prefix;
+  uint8_t num_rooms;
+  gp2pp_room_usernum_t usernum[0];
 } __attribute__ ((packed));
 typedef struct gp2pp_roominfo_reply_s gp2pp_roominfo_reply_t;
 

@@ -266,20 +266,18 @@ void* gsp_handler_privdata(gsp_handtab_t *htab, int msgtype) {
 }
 
 
-int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv) {
+int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv, unsigned int internal_ip, int internal_port) {
   gsp_login_t msg;
   struct sockaddr_in local;
   static char *hex_digit = "0123456789abcdef";
   int i,j;
-  unsigned int local_len = sizeof(local);
   
   memset(&msg, 0, sizeof(msg));
   strncpy(msg.name, login, 16);
   msg.name[15] = 0;
   msg.pwhash_size = GSP_PWHASHSIZE;
-  getsockname(sock, (struct sockaddr*) &local, &local_len);
-  msg.internal_ip = local.sin_addr;
-  msg.internal_port = local.sin_port;
+  msg.internal_ip.s_addr = internal_ip;
+  msg.internal_port = htons(internal_port);
   for (i = 0, j = 0; i < GSP_PWHASHSIZE; i += 2, j++) {
     msg.pwhash[i] = hex_digit[(md5pass[j] >> 4) & 0xF];
     msg.pwhash[i+1] = hex_digit[md5pass[j] & 0xF];

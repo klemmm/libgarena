@@ -12,15 +12,15 @@ struct llist_s {
   struct cell_s *head;
 };  
 
-struct hashitem_s {
-  hash_keytype key;
+struct ihashitem_s {
+  ihash_keytype key;
   void *value;
-  struct hashitem_s *next;
+  struct ihashitem_s *next;
 };
 
-struct hash_s {
+struct ihash_s {
   unsigned int size;
-  struct hashitem_s **h;
+  struct ihashitem_s **h;
 };
 
 
@@ -201,35 +201,35 @@ void llist_empty_val(llist_t desc) {
   desc->head = NULL;
 }  
 
-static unsigned int hash_func(hash_keytype id) {
+static unsigned int ihash_func(ihash_keytype id) {
  char *buf = (char*) &id;
  unsigned int i;
  unsigned int res = 0;
- for (i = 0; i < sizeof(hash_keytype); i++)
+ for (i = 0; i < sizeof(ihash_keytype); i++)
  {
    res = res ^ buf[i];
  }
  return(res);
 } 
 
-int hash_num(hash_t hash) {
-  hashitem_t item;
+int ihash_num(ihash_t ihash) {
+  ihashitem_t item;
   unsigned int i;
   int num = 0;
   
-  for (i = 0; i < hash->size; i++) {
-    for (item = hash->h[i]; item != NULL; item = item->next)
+  for (i = 0; i < ihash->size; i++) {
+    for (item = ihash->h[i]; item != NULL; item = item->next)
       num++;
   }
   return num;
   
 }  
 
-int hash_put(hash_t hash, hash_keytype key, void *value) {
-  hashitem_t item;
-  unsigned int hv = hash_func(key) % hash->size;
+int ihash_put(ihash_t ihash, ihash_keytype key, void *value) {
+  ihashitem_t item;
+  unsigned int hv = ihash_func(key) % ihash->size;
 
-  item = malloc(sizeof(struct hashitem_s));
+  item = malloc(sizeof(struct ihashitem_s));
   if (item == NULL) {
     return -1;
   }
@@ -237,17 +237,17 @@ int hash_put(hash_t hash, hash_keytype key, void *value) {
   item->key = key;
   item->value = value;
 
-  item->next = hash->h[hv];
-  hash->h[hv] = item;
+  item->next = ihash->h[hv];
+  ihash->h[hv] = item;
 
   return 0;
 }
 
-void *hash_get(hash_t hash, hash_keytype key) {
-  hashitem_t item;
-  unsigned int hv = hash_func(key) % hash->size;
+void *ihash_get(ihash_t ihash, ihash_keytype key) {
+  ihashitem_t item;
+  unsigned int hv = ihash_func(key) % ihash->size;
 
-  for (item = hash->h[hv]; item != NULL; item = item->next) {
+  for (item = ihash->h[hv]; item != NULL; item = item->next) {
     if (key == item->key)
       return item->value;
   }
@@ -255,13 +255,13 @@ void *hash_get(hash_t hash, hash_keytype key) {
   return NULL;
 }
 
-int hash_del(hash_t hash, hash_keytype key) {
-  hashitem_t item, *prev;
-  unsigned int hv = hash_func(key) % hash->size;
+int ihash_del(ihash_t ihash, ihash_keytype key) {
+  ihashitem_t item, *prev;
+  unsigned int hv = ihash_func(key) % ihash->size;
 
-  prev = &hash->h[hv];
+  prev = &ihash->h[hv];
   item = NULL;
-  for (item = hash->h[hv]; item != NULL; item = item->next) {
+  for (item = ihash->h[hv]; item != NULL; item = item->next) {
     if (key == item->key)
     {
       *prev = item->next;
@@ -273,35 +273,52 @@ int hash_del(hash_t hash, hash_keytype key) {
   return -1;
 }
 
-void hash_free(hash_t hash) {
+void ihash_free(ihash_t ihash) {
   unsigned int i;
-  hashitem_t item,old;
+  ihashitem_t item,old;
   
-  for (i = 0 ; i < hash->size; i++) {
-    item = hash->h[i];
+  for (i = 0 ; i < ihash->size; i++) {
+    item = ihash->h[i];
     while(item != NULL) {
       old = item;
       item = item->next;
       free(old);
     }
   }  
-  free(hash->h);
-  free(hash);   
+  free(ihash->h);
+  free(ihash);   
 }
 
-hash_t hash_init() {
-  hash_t hash;
+void ihash_free_val(ihash_t ihash) {
+  unsigned int i;
+  ihashitem_t item,old;
+  
+  for (i = 0 ; i < ihash->size; i++) {
+    item = ihash->h[i];
+    while(item != NULL) {
+      old = item;
+      item = item->next;
+      free(old->value);
+      free(old);
+    }
+  }  
+  free(ihash->h);
+  free(ihash);   
+}
+
+ihash_t ihash_init() {
+  ihash_t ihash;
   int size = HASH_SIZE;
   
-  hash = malloc(sizeof(struct hash_s));
-  if(hash == NULL)
+  ihash = malloc(sizeof(struct ihash_s));
+  if(ihash == NULL)
     return  NULL; 
-  hash->h = malloc(size * sizeof(struct hashitem_s*));
-  if (hash->h == NULL) {
-    free(hash);
+  ihash->h = malloc(size * sizeof(struct ihashitem_s*));
+  if (ihash->h == NULL) {
+    free(ihash);
     return (NULL);
   }
-  hash->size = size;
-  memset(hash->h, 0, size*sizeof(struct hashitem_s*));
-  return(hash);
+  ihash->size = size;
+  memset(ihash->h, 0, size*sizeof(struct ihashitem_s*));
+  return(ihash);
 }

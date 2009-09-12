@@ -9,10 +9,14 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
+#include <zlib.h>
+
 #include <garena/garena.h>
 #include <garena/gcrp.h>
 #include <garena/error.h>
 #include <garena/util.h>
+
+#include <mhash.h>
 
 void gcrp_fini(void) {
 }
@@ -180,12 +184,51 @@ int gcrp_output(int sock, int type, char *payload, unsigned int length) {
  * @param room_id The ROOM ID of the room to join
  * @return 0 for succes, -1 for failure
  */
-int gcrp_send_join(int sock, unsigned int room_id) {
+int gcrp_send_join(int sock, unsigned int room_id, gcrp_join_block_t *join_block, char *md5pass) {
   static char buf[GCRP_MAX_MSGSIZE];
+  static char hex_digit[] = "0123456789abcdef";
+  static char pwhash[GCRP_PWHASHSIZE];
+  int r;
+  int i,j;
+  unsigned int compressed_size;
   gcrp_me_join_t *join = (gcrp_me_join_t *) buf;
-  join->room_id = ghtonl(room_id);
-  memcpy(buf + sizeof(gcrp_me_join_t), GCRP_JOINCODE, sizeof(GCRP_JOINCODE)-1);
-  return gcrp_output(sock, GCRP_MSG_JOIN, buf, sizeof(GCRP_JOINCODE) + sizeof(gcrp_me_join_t) - 1);
+  gcrp_me_join_suffix_t *suffix;
+  MHASH mh;
+  z_stream strm;
+            
+  strm.zalloc = Z_NULL; 
+  strm.zfree = Z_NULL;
+  strm.opaque = Z_NULL;  
+  
+  r = deflateInit(&strm, Z_DEFAULT_COMPRESSION);
+  if (r != Z_OK) {
+    garena_errno = GARENA_ERR_NORESOURCE;
+    return -1;
+  }
+  
+  strm.avail_in = sizeof(gcrp_join_block_t);
+  strm.next_in = (char*)join_block;
+  strm.avail_out = sizeof(buf) - sizeof(gcrp_me_join_t) - sizeof(gcrp_me_join_suffix_t);
+  strm.next_out = buf + sizeof(gcrp_me_join_t);
+  
+  deflate(&strm, Z_FINISH);
+  deflateEnd(&strm);
+  compressed_size = sizeof(buf) - sizeof(gcrp_me_join_t) - sizeof(gcrp_me_join_suffix_t) - strm.avail_out;
+  suffix = (gcrp_me_join_suffix_t *) (buf + sizeof(gcrp_me_join_t) + compressed_size);
+  
+  memset(join, 0, sizeof(gcrp_me_join_t));
+  memset(suffix, 0, sizeof(gcrp_me_join_suffix_t));
+  join->room_id = ghtonl(room_id);      
+  join->infolen = sizeof(join->infocrc) + compressed_size;
+  for (i = 0, j = 0; i < GSP_PWHASHSIZE; i += 2, j++) {
+      suffix->pwhash[i] = hex_digit[(md5pass[j] >> 4) & 0xF];
+      suffix->pwhash[i+1] = hex_digit[md5pass[j] & 0xF];
+  }
+  mh = mhash_init(MHASH_CRC32B);
+  mhash(mh, buf + sizeof(gcrp_me_join_t), compressed_size);
+  mhash_deinit(mh, &join->infocrc);
+
+  return gcrp_output(sock, GCRP_MSG_JOIN, buf, sizeof(gcrp_me_join_t) + compressed_size + sizeof(gcrp_me_join_suffix_t));
 }
 
 /**

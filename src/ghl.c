@@ -29,18 +29,18 @@ static void send_hello(ghl_ctx_t *ctx, ghl_member_t *cur) {
     if (cur->conn_ok > 0) {
       remote.sin_addr = cur->effective_ip;
       remote.sin_port = htons(cur->effective_port);
-      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.id, &remote);
+      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.user_id, &remote);
     } else {
       remote.sin_addr = cur->external_ip;
       remote.sin_port = htons(cur->external_port);
-      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.id, &remote);
+      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.user_id, &remote);
       remote.sin_addr = cur->internal_ip;
       remote.sin_port = htons(cur->internal_port);
-      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.id, &remote);
+      gp2pp_send_hello_request(ctx->peersock, ctx->my_info.user_id, &remote);
       if (cur->external_port != GP2PP_PORT) {
         remote.sin_addr = cur->external_ip;
         remote.sin_port = htons(GP2PP_PORT);
-        gp2pp_send_hello_request(ctx->peersock, ctx->my_info.id, &remote);
+        gp2pp_send_hello_request(ctx->peersock, ctx->my_info.user_id, &remote);
       }
     }
 
@@ -56,7 +56,7 @@ static void send_hello_to_all(ghl_ctx_t *ctx) {
   
   for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
     cur = llist_val(iter2);
-    if (cur->user_id == ctx->my_info.id)
+    if (cur->user_id == ctx->my_info.user_id)
       continue;
     send_hello(ctx, cur);
   }
@@ -144,6 +144,18 @@ static int do_hello(void *privdata) {
   return 0;
 }
 
+static int do_roominfo_query(void *privdata) {
+  ghl_ctx_t *ctx = privdata;
+  
+  if (ctx && ctx->connected && gp2pp_request_roominfo(ctx->peersock, ctx->my_info.user_id, ctx->server_ip, ctx->gp2pp_port) == -1) {
+    fprintf(deb, "[WARN/GHL] Room Info will not be available because the request failed.\n");
+    fflush(deb); 
+  }
+
+  ctx->roominfo_timer = ghl_new_timer(time(NULL) + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, privdata);
+  return 0;
+}
+
 
 void ghl_fini(void) {
   if (timers != NULL)
@@ -169,14 +181,21 @@ static int ghl_signal_event(ghl_ctx_t *ctx, int event, void *eventparam) {
 }
 
 static int handle_auth(int type, void *payload, unsigned int length, void *privdata) {
-  gsp_myinfo_t *myinfo = payload;
+  gsp_login_reply_t *login_reply = payload;
   ghl_servconn_t servconn;
   
   ghl_ctx_t *ctx = privdata;
   switch(type) {
-    case GSP_MSG_MYINFO:
-      myinfo_extract(&ctx->my_info, myinfo);
+    case GSP_MSG_LOGIN_REPLY:
+      myinfo_extract(&ctx->my_info, &login_reply->my_info);
+      fprintf(deb, "[GHL] My user_id is %x\n", ctx->my_info.user_id);
+      fflush(deb);
       ctx->auth_ok = 1;
+      if (gp2pp_request_roominfo(ctx->peersock, ctx->my_info.user_id, ctx->server_ip, ctx->gp2pp_port) == -1) {
+        fprintf(deb, "[WARN/GHL] Room Info will not be available because the request failed.\n");
+        fflush(deb); 
+      }
+
       if ((ctx->connected = ctx->lookup_ok)) {
         servconn.result = GHL_EV_RES_SUCCESS;
         ghl_signal_event(ctx, GHL_EV_SERVCONN, &servconn);
@@ -199,8 +218,8 @@ static int handle_ip_lookup(int type, void *payload, unsigned int length, void *
   gp2pp_lookup_reply_t *lookup = payload;
   switch(type) {
     case GP2PP_MSG_IP_LOOKUP_REPLY:
-      ctx->my_external_ip = lookup->my_external_ip;
-      ctx->my_external_port = htons(lookup->my_external_port);
+      ctx->my_info.external_ip = lookup->my_external_ip;
+      ctx->my_info.external_port = htons(lookup->my_external_port);
       ctx->lookup_ok = 1;
       if ((ctx->connected = ctx->auth_ok)) {
         servconn.result = GHL_EV_RES_SUCCESS;
@@ -215,8 +234,21 @@ static int handle_ip_lookup(int type, void *payload, unsigned int length, void *
 }
 
 static int handle_roominfo(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote) {
-  gp2pp_roominfo_t *roominfo = payload;
+  gp2pp_roominfo_reply_t *roominfo = payload;
+  unsigned int i;
+  unsigned int *num_users;
+  unsigned int room_id;
   ghl_ctx_t *ctx = privdata;
+  
+  for (i = 0; i < roominfo->num_rooms; i++) {
+    room_id = (ghtonl(roominfo->prefix) << 8) | (ghtonl(roominfo->usernum[i].suffix) & 0xFF);
+    num_users = ihash_get(ctx->roominfo, room_id);
+    if (num_users == NULL) {
+      num_users = malloc(sizeof(unsigned int));
+      ihash_put(ctx->roominfo, room_id,num_users);
+    } 
+    *num_users = roominfo->usernum[i].num_users;
+  }
   return 0;
 }
 
@@ -455,7 +487,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   }
   
   remote->sin_port = htons(ch->member->external_port);
-  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, ctx->my_info.id, conn_id, seq1, ch->rcv_next, 0, remote);
+  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, ctx->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
   
   return 0;
 }
@@ -484,7 +516,7 @@ static int handle_peer_msg(int type, void *payload, unsigned int length, void *p
         member->conn_ok = 1;
       member->effective_ip = remote->sin_addr;
       member->effective_port = htons(remote->sin_port);
-      gp2pp_send_hello_reply(ctx->peersock, ctx->my_info.id, user_id, remote);
+      gp2pp_send_hello_reply(ctx->peersock, ctx->my_info.user_id, user_id, remote);
       break;
     case GP2PP_MSG_HELLO_REP:
       IFDEBUG(printf("[GHL/DEBUG] Received HELLO reply from %s\n", member->name));
@@ -533,7 +565,7 @@ static void send_hello_to_members(ghl_rh_t *rh) {
   
   for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
     cur = llist_val(iter2);
-    if (cur->user_id == ctx->my_info.id)
+    if (cur->user_id == ctx->my_info.user_id)
       continue;
     
     send_hello(ctx, cur);
@@ -547,6 +579,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
   ghl_me_join_t join;
   ghl_rh_t *rh = NULL;
   ghl_ctx_t *ctx = privdata;
+  int err = 0;
   ghl_member_t *member;
   unsigned int i;
   
@@ -578,7 +611,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
         IFDEBUG(printf("[GHL] Room member: %s\n", member->name));
         
 /*        printf("member %s PORT=%u ID=%x\n", member->name, htons(member->external_port), ghtonl(member->user_id)); */
-        if (strcmp(ctx->myname, member->name) == 0)
+        if (strcmp(ctx->my_info.name, member->name) == 0)
           rh->me = member;
       }
       
@@ -588,14 +621,27 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
         llist_empty_val(rh->members);
         return -1;
       }
-      ctx->my_info.id = rh->me->user_id;
+      ctx->my_info.user_id = rh->me->user_id;
       rh->got_members = 1;
       break;  
+    case GCRP_MSG_JOIN_FAILED:
 
+      rh = ctx->room;
+      if (rh == NULL) {
+        fprintf(stderr, "[GHL/WARN] Failed to join a room that we didn't ask to join\n");
+        return 0;
+      }
+
+      join.result = GHL_EV_RES_FAILURE;
+      join.rh = rh;
+      err |= (ghl_signal_event(rh->ctx, GHL_EV_ME_JOIN, &join) == -1);
+      rh->timeout = NULL; /* prevent ghl_free_room from deleting the timer we are currently handling */
+      err |= (ghl_free_room(rh) == -1);
+      return err ? -1 : 0;
+      
     default:  
       garena_errno = GARENA_ERR_INVALID;
       return -1;
-      break;
   }
   
   if (rh && rh->got_welcome && rh->got_members) {
@@ -638,7 +684,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
       join_ev.rh = rh;
       join_ev.member = member;
       ghl_signal_event(ctx, GHL_EV_JOIN, &join_ev);
-      if (member->user_id != ctx->my_info.id) {
+      if (member->user_id != ctx->my_info.user_id) {
         send_hello(ctx, member);
       }
 
@@ -737,7 +783,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
 
 ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_port, int gp2pp_port) {
   int i;
-  char md5pass[16];
+  unsigned int local_len = sizeof(struct sockaddr_in);
   MHASH mh;
   struct sockaddr_in local;
   struct sockaddr_in fsocket;
@@ -753,15 +799,16 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   ctx->peersock = -1;
   ctx->gp2pp_port = gp2pp_port ? gp2pp_port : GP2PP_PORT;
   ctx->hello_timer = NULL;
+  ctx->roominfo_timer = NULL;
+  ctx->conn_retrans_timer = NULL;
   ctx->auth_ok = 0;
   ctx->lookup_ok = 0;
-  ctx->my_info.id = 0;
   ctx->connected = 0;
   ctx->server_ip = server_ip;
   ctx->roominfo = NULL;  
   ctx->servsock = socket(PF_INET, SOCK_STREAM, 0);
-  
-  ctx->roominfo = hash_init();
+  memset(&ctx->my_info, 0, sizeof(ctx->my_info));
+  ctx->roominfo = ihash_init();
   if (ctx->roominfo == NULL) {
     garena_errno = GARENA_ERR_NORESOURCE;
     goto err;
@@ -785,7 +832,37 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     garena_errno = GARENA_ERR_LIBC;
     goto err;
   }
+
+  fsocket.sin_family = AF_INET;
+  fsocket.sin_port = htons(ctx->gp2pp_port);
+  fsocket.sin_addr.s_addr = server_ip;
+  if (connect(ctx->peersock, (struct sockaddr *) &fsocket, sizeof(fsocket)) == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    goto err;
+  }
+  if (getsockname(ctx->peersock, (struct sockaddr *) &local, &local_len) == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    goto err;
+  }
+  ctx->my_info.internal_ip = local.sin_addr;
+  ctx->my_info.internal_port = htons(local.sin_port);
   
+  close(ctx->peersock);
+  ctx->peersock = socket(PF_INET, SOCK_DGRAM, 0);
+  if (ctx->peersock == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    goto err;
+  }
+  
+  local.sin_family = AF_INET;
+  local.sin_port = htons(GP2PP_PORT); 
+  local.sin_addr.s_addr = INADDR_ANY;
+  
+  if (bind(ctx->peersock, (struct sockaddr *) &local, sizeof(local)) == -1) {
+    garena_errno = GARENA_ERR_LIBC;
+    goto err;
+  }
+
   fsocket.sin_family = AF_INET;
   fsocket.sin_port = server_port ? htons(server_port) : htons(GSP_PORT);
   fsocket.sin_addr.s_addr = server_ip;
@@ -799,24 +876,18 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     goto err;
   if (gp2pp_do_ip_lookup(ctx->peersock, ctx->server_ip, ctx->gp2pp_port) == -1)
     goto err;
-  if (gp2pp_request_roominfo(ctx->peersock, ctx->my_info.id, ctx->server_ip, ctx->gp2pp_port) == -1)
-    goto err;
 
   mh = mhash_init(MHASH_MD5);
   if (mh == NULL)
     goto err;
   
   mhash(mh, password, strlen(password));
-  mhash_deinit(mh, &md5pass);
+  mhash_deinit(mh, &ctx->md5pass);
   
-  if (gsp_send_login(ctx->servsock, name, md5pass, ctx->session_key, ctx->session_iv) == -1)
+  if (gsp_send_login(ctx->servsock, name, ctx->md5pass, ctx->session_key, ctx->session_iv, ctx->my_info.internal_ip.s_addr, ctx->my_info.internal_port) == -1)
     goto err;
   
-  memcpy(ctx->md5pass, md5pass, 16);
-  strncpy(ctx->myname, name, sizeof(ctx->myname)-1);
   ctx->room = NULL;
-  
-  
   
   for (i = 0 ; i < GHL_EV_NUM; i++) {
     ctx->ghl_handlers[i].fun = NULL;
@@ -833,7 +904,7 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
     goto err;
   
   /* GSP handlers */
-  if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_MYINFO, handle_auth, ctx) == -1)
+  if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_LOGIN_REPLY, handle_auth, ctx) == -1)
     goto err;
   if (gsp_register_handler(ctx->gsp_htab, GSP_MSG_AUTH_FAIL, handle_auth, ctx) == -1)
     goto err;
@@ -852,6 +923,8 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_STARTVPN, handle_room_activity, ctx) == -1)
     goto err;
   if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_STOPVPN, handle_room_activity, ctx) == -1)
+    goto err;
+  if (gcrp_register_handler(ctx->gcrp_htab, GCRP_MSG_JOIN_FAILED, handle_room_join, ctx) == -1)
     goto err;
     
     /* GP2PP handlers */
@@ -880,7 +953,9 @@ ghl_ctx_t *ghl_new_ctx(char *name, char *password, int server_ip, int server_por
   /* timers handlers */
   if ((ctx->hello_timer = ghl_new_timer(time(NULL) + GP2PP_HELLO_INTERVAL, do_hello, ctx)) == NULL)
     goto err;
-  if ((ctx->hello_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, ctx)) == NULL)
+  if ((ctx->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, ctx)) == NULL)
+    goto err;
+  if ((ctx->roominfo_timer = ghl_new_timer(time(NULL) + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, ctx)) == NULL)
     goto err;
     
   return ctx;
@@ -898,15 +973,25 @@ err:
     close(ctx->peersock);
   if (ctx->hello_timer)
     ghl_free_timer(ctx->hello_timer);
+  if (ctx->conn_retrans_timer)
+    ghl_free_timer(ctx->conn_retrans_timer);
+  if (ctx->roominfo_timer)
+    ghl_free_timer(ctx->roominfo_timer);
   if (ctx->roominfo)
-    hash_free(ctx->roominfo);
+    ihash_free_val(ctx->roominfo);
   free(ctx);
   return NULL;
 }
 
 ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, unsigned int room_id) {
   struct sockaddr_in fsocket;
+  gcrp_join_block_t join_block;
   ghl_rh_t *rh;
+  
+  if (ctx->connected == 0) {
+    garena_errno = GARENA_ERR_INVALID;
+    return NULL;
+  }
   
   if (ctx->room != NULL) {
     garena_errno = GARENA_ERR_INUSE;
@@ -936,7 +1021,8 @@ ghl_rh_t *ghl_join_room(ghl_ctx_t *ctx, int room_ip, int room_port, unsigned int
     return NULL;
   }
   
-  if (gcrp_send_join(rh->roomsock, room_id) == -1) {
+  myinfo_pack(&join_block, &ctx->my_info);
+  if (gcrp_send_join(rh->roomsock, room_id, &join_block, ctx->md5pass) == -1) {
     close(rh->roomsock);
     free(rh);
     return NULL;
@@ -1022,18 +1108,18 @@ static int ghl_free_room(ghl_rh_t *rh) {
 }
 
 int ghl_leave_room(ghl_rh_t *rh) {
-  if (gcrp_send_part(rh->roomsock, rh->ctx->my_info.id) == -1) {
+  if (gcrp_send_part(rh->roomsock, rh->ctx->my_info.user_id) == -1) {
     return -1;
   }
   return ghl_free_room(rh);
 }
 
 int ghl_togglevpn(ghl_rh_t *rh, int vpn) {
-  return gcrp_send_togglevpn(rh->roomsock, rh->ctx->my_info.id, vpn);
+  return gcrp_send_togglevpn(rh->roomsock, rh->ctx->my_info.user_id, vpn);
 }
 
 int ghl_talk(ghl_rh_t *rh, char *text) {
-  return gcrp_send_talk(rh->roomsock, rh->room_id, rh->ctx->my_info.id, text);  
+  return gcrp_send_talk(rh->roomsock, rh->room_id, rh->ctx->my_info.user_id, text);  
 }
 
 int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, char *payload, unsigned int length) {
@@ -1048,7 +1134,7 @@ int ghl_udp_encap(ghl_ctx_t *ctx, ghl_member_t *member, int sport, int dport, ch
   fsocket.sin_port = htons(member->effective_port);
   fsocket.sin_addr = member->effective_ip;
   
-  return gp2pp_send_udp_encap(ctx->peersock, ctx->my_info.id, sport, dport, payload, length, &fsocket);
+  return gp2pp_send_udp_encap(ctx->peersock, ctx->my_info.user_id, sport, dport, payload, length, &fsocket);
 }
 
 int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
@@ -1063,10 +1149,11 @@ int ghl_fill_fds(ghl_ctx_t *ctx, fd_set *fds) {
   FD_SET(ctx->peersock, fds);
   if (ctx->peersock > max)
     max = ctx->peersock;
-  FD_SET(ctx->servsock, fds);
-  if (ctx->servsock > max)
-    max = ctx->servsock;
-  /* FD_SET(ctx->servsock, fds); */
+  if (ctx->servsock != -1) {
+    FD_SET(ctx->servsock, fds);
+    if (ctx->servsock > max)
+      max = ctx->servsock;
+  }
   return max;
 }
 
@@ -1162,12 +1249,17 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
     r = gp2pp_read(ctx->peersock, buf, GCRP_MAX_MSGSIZE, &remote);
     if (r != -1) {
       gp2pp_input(ctx->gp2pp_htab, buf, r, &remote);
-    }
+    } 
   }
   if (FD_ISSET(ctx->servsock, fds)) {
     r = gsp_read(ctx->servsock, buf, GSP_MAX_MSGSIZE);
     if (r != -1) {
       gsp_input(ctx->gsp_htab, buf, r, ctx->session_key, ctx->session_iv);
+    } else {
+      fprintf(deb, "[WARN/GHL] Disconnected from main server, but we don't care\n");
+      fflush(deb);
+      close(ctx->servsock);
+      ctx->servsock = -1;
     }
   }
   return 0;
@@ -1347,7 +1439,7 @@ ghl_ch_t *ghl_conn_connect(ghl_ctx_t *ctx, ghl_member_t *member, int port) {
   remote.sin_family = AF_INET;
   remote.sin_addr = ch->member->effective_ip;
   remote.sin_port = htons(ch->member->effective_port);
-  if (gp2pp_send_initconn(ctx->peersock, ctx->my_info.id, ch->conn_id, port, GP2PP_MAGIC_LOCALIP, &remote) == -1) {
+  if (gp2pp_send_initconn(ctx->peersock, ctx->my_info.user_id, ch->conn_id, port, GP2PP_MAGIC_LOCALIP, &remote) == -1) {
     llist_free(ch->sendq);
     llist_free(ch->recvq);
     llist_del_item(rh->conns, ch);
@@ -1382,7 +1474,7 @@ void ghl_conn_close(ghl_ctx_t *ctx, ghl_ch_t *ch) {
   remote.sin_addr = ch->member->effective_ip;
   remote.sin_port = htons(ch->member->effective_port);
   for (i = 0; i < 4; i++) 
-    gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_FIN, NULL, 0, ctx->my_info.id, ch->conn_id, ch->rcv_next, ch->rcv_next, 0, &remote);
+    gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_FIN, NULL, 0, ctx->my_info.user_id, ch->conn_id, ch->rcv_next, ch->rcv_next, 0, &remote);
   ch->cstate = GHL_CSTATE_CLOSING_OUT;
 
 }
@@ -1393,12 +1485,48 @@ static void xmit_packet(ghl_ctx_t *ctx, ghl_ch_pkt_t *pkt) {
   remote.sin_addr = pkt->ch->member->effective_ip;
   remote.sin_port = htons(pkt->ch->member->effective_port);
   pkt->xmit_ts = time(NULL);
-  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_DATA, pkt->payload, pkt->length, ctx->my_info.id, pkt->ch->conn_id, pkt->seq, pkt->ch->rcv_next, pkt->ts_rel, &remote);
+  gp2pp_output_conn(ctx->peersock, GP2PP_CONN_MSG_DATA, pkt->payload, pkt->length, ctx->my_info.user_id, pkt->ch->conn_id, pkt->seq, pkt->ch->rcv_next, pkt->ts_rel, &remote);
 }
 
 static void myinfo_pack(gsp_myinfo_t *dst, ghl_myinfo_t *src) {
+  memset(dst, 0, sizeof(gsp_myinfo_t));
+  dst->user_id = ghtonl(src->user_id);
+  memcpy(dst->name, src->name, sizeof(dst->name));
+  memcpy(dst->country, src->country, sizeof(dst->country));
+  dst->name[sizeof(dst->name) - 1] = 0; /* not sure if it's necessary, don't know if the server expects a null-terminated string */
+  dst->level = src->level;
+  dst->external_ip = src->external_ip;
+  dst->external_port = htons(src->external_port);
+  dst->internal_ip = src->internal_ip;
+  dst->internal_port = htons(src->internal_port);
+
+  dst->unknown1 = src->unknown1;
+  dst->unknown2 = src->unknown2;
+  dst->unknown3 = src->unknown3;
+  dst->unknown4 = src->unknown4;
+  
 }
 static void myinfo_extract(ghl_myinfo_t *dst, gsp_myinfo_t *src) {
+  dst->user_id = ghtonl(src->user_id);
+  memcpy(dst->name, src->name, sizeof(src->name));
+  memcpy(dst->country, src->country, sizeof(src->country));
+  dst->name[sizeof(src->name)] = 0;
+  dst->country[sizeof(src->country)] = 0;
+  dst->level = src->level;
+  /* 
+   * ignore the src->internal_ip and src->internal_port
+   * sent by the server, because it is computed locally
+   */
+  /* 
+   * ignore src->external_ip and src->external_port
+   * because it is computed more reliably by
+   * the ip lookup.
+   */
+  
+  dst->unknown1 = src->unknown1;
+  dst->unknown2 = src->unknown2;
+  dst->unknown3 = src->unknown3;
+  dst->unknown4 = src->unknown4;
 }
 
 static void member_extract(ghl_member_t *dst, gcrp_member_t *src) {

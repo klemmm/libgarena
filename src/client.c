@@ -49,8 +49,6 @@ char tun_name[IFNAMSIZ];
 char fwdtun_name[IFNAMSIZ];
 int tun_fd, fwdtun_fd;
 
-hash_t ch2sock;
-llist_t socklist;
 
 unsigned int routing_host=INADDR_NONE;
 
@@ -66,6 +64,157 @@ typedef struct  {
 
 ghl_ctx_t *ctx = NULL;
 screen_ctx_t screen;
+
+#define HASH_SIZE 256
+
+typedef struct hash_s *hash_t;
+typedef struct hashitem_s *hashitem_t;
+typedef void *hash_keytype;
+
+struct hashitem_s { 
+  hash_keytype key;
+  void *value;  
+  struct hashitem_s *next;
+};
+
+struct hash_s {
+  unsigned int size;
+  struct hashitem_s **h;
+};
+
+static int hash_num(hash_t hash);
+static int hash_put(hash_t hash, hash_keytype key, void *value);
+static void *hash_get(hash_t hash, hash_keytype key);
+static int hash_del(hash_t hash, hash_keytype key);
+static void hash_free(hash_t hash);
+static void hash_free_val(hash_t hash);
+static hash_t hash_init();
+
+hash_t ch2sock;
+llist_t socklist;
+
+
+static unsigned int hash_func(hash_keytype id) {
+ char *buf = (char*) &id;
+ unsigned int i;
+ unsigned int res = 0;
+ for (i = 0; i < sizeof(hash_keytype); i++)
+ {
+   res = res ^ buf[i];
+ }
+ return(res);
+} 
+
+int hash_num(hash_t hash) {
+  hashitem_t item;
+  unsigned int i;
+  int num = 0;
+  
+  for (i = 0; i < hash->size; i++) {
+    for (item = hash->h[i]; item != NULL; item = item->next)
+      num++;
+  }
+  return num;
+  
+}  
+
+int hash_put(hash_t hash, hash_keytype key, void *value) {
+  hashitem_t item;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  item = malloc(sizeof(struct hashitem_s));
+  if (item == NULL) {
+    return -1;
+  }
+   
+  item->key = key;
+  item->value = value;
+
+  item->next = hash->h[hv];
+  hash->h[hv] = item;
+
+  return 0;
+}
+
+void *hash_get(hash_t hash, hash_keytype key) {
+  hashitem_t item;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  for (item = hash->h[hv]; item != NULL; item = item->next) {
+    if (key == item->key)
+      return item->value;
+  }
+   
+  return NULL;
+}
+
+int hash_del(hash_t hash, hash_keytype key) {
+  hashitem_t item, *prev;
+  unsigned int hv = hash_func(key) % hash->size;
+
+  prev = &hash->h[hv];
+  item = NULL;
+  for (item = hash->h[hv]; item != NULL; item = item->next) {
+    if (key == item->key)
+    {
+      *prev = item->next;
+      free(item);
+      return 0;  
+    } else prev = &item->next;
+  }
+   
+  return -1;
+}
+
+void hash_free(hash_t hash) {
+  unsigned int i;
+  hashitem_t item,old;
+  
+  for (i = 0 ; i < hash->size; i++) {
+    item = hash->h[i];
+    while(item != NULL) {
+      old = item;
+      item = item->next;
+      free(old);
+    }
+  }  
+  free(hash->h);
+  free(hash);   
+}
+
+void hash_free_val(hash_t hash) {
+  unsigned int i;
+  hashitem_t item,old;
+  
+  for (i = 0 ; i < hash->size; i++) {
+    item = hash->h[i];
+    while(item != NULL) {
+      old = item;
+      item = item->next;
+      free(old->value);
+      free(old);
+    }
+  }  
+  free(hash->h);
+  free(hash);   
+}
+
+hash_t hash_init() {
+  hash_t hash;
+  int size = HASH_SIZE;
+  
+  hash = malloc(sizeof(struct hash_s));
+  if(hash == NULL)
+    return  NULL; 
+  hash->h = malloc(size * sizeof(struct hashitem_s*));
+  if (hash->h == NULL) {
+    free(hash);
+    return (NULL);
+  }
+  hash->size = size;
+  memset(hash->h, 0, size*sizeof(struct hashitem_s*));
+  return(hash);
+}
 
 void screen_init(screen_ctx_t *screen) {
   initscr();
@@ -278,7 +427,7 @@ int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
   char buf[256];
   ghl_servconn_t *servconn = event_param;
   if (servconn->result == GHL_EV_RES_SUCCESS) {
-    snprintf(buf, 256, "Connected to server (my external ip/port is %s:%u).\n", inet_ntoa(ctx->my_external_ip), ctx->my_external_port);
+    snprintf(buf, sizeof(buf), "Connected to server (my external ip/port is %s:%u).\n", inet_ntoa(ctx->my_info.external_ip), ctx->my_info.external_port);
     screen_output(&screen, buf);
   } else {
     screen_output(&screen, "Connection to server failed.\n");
@@ -319,7 +468,7 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
     snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.28.%u netmask 255.255.255.0", fwdtun_name, join->rh->me->virtual_suffix);
     system(cmd);
   } else {
-    screen_output(&screen, "Room join failed (timeout)\n");
+    screen_output(&screen, "Room join failed\n");
   }
   return 0;
 }
@@ -682,7 +831,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
   }
 }
 
-#define MAX_CMDS 10
+#define MAX_CMDS 11
 #define MAX_PARAMS 16
 
 typedef int cmdfun_t(screen_ctx_t *screen, int parc, char **parv);
@@ -722,6 +871,28 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
   return 0;
 }
 
+int handle_cmd_roominfo(screen_ctx_t *screen, int parc, char **parv) {
+  unsigned int serv_ip;
+  unsigned int *num_users;
+  char buf[256];
+  if (parc != 2) {
+    screen_output(screen, "Usage: /ROOMINFO <room ID>\n");
+    return -1;
+  }
+  if ((ctx == NULL) || (ctx->connected == 0)){
+    screen_output(screen, "You are not connected to a server\n");
+    return -1;
+  }
+  num_users = ihash_get(ctx->roominfo, atoi(parv[1]));
+  if (num_users == NULL) {
+    screen_output(screen, "I haven't any information on this room\n");
+  } else {
+    snprintf(buf, sizeof(buf), "The room has %u users.\n", *num_users);
+    screen_output(screen, buf);
+  }
+
+}
+
 int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
   unsigned int serv_ip;
   ghl_rh_t *rh = ctx ? ctx->room : NULL;
@@ -738,7 +909,7 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
     }
     return -1;
   }
-  if (ctx == NULL) {
+  if ((ctx == NULL) || (ctx->connected == 0)){
     screen_output(screen, "You are not connected to a server\n");
     return -1;
   }
@@ -820,6 +991,7 @@ int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
       if  ((strcasecmp(member->name, parv[1]) == 0) ||
           ( ((member->virtual_suffix << 24) | inet_addr(GARENA_NETWORK)) == inet_addr(parv[1]) ) ||
           (member->external_ip.s_addr == inet_addr(parv[1])) ||
+          (member->internal_ip.s_addr == inet_addr(parv[1])) ||
           (ghtonl(member->user_id) == strtoul(parv[1], NULL, 16))) {
            snprintf(buf, 512, "Member name: %s\nUser ID: %x\nCountry: %s\nLevel: %u\nIn game: %s\nVirtual IP: 192.168.29.%u\n", member->name, member->user_id, member->country, member->level, member->vpn ? "yes" : "no", member->virtual_suffix);
           screen_output(screen, buf);
@@ -881,6 +1053,7 @@ int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
 
 cmd_t cmdtab[MAX_CMDS] = {
  {handle_cmd_connect, "CONNECT"},
+ {handle_cmd_roominfo, "ROOMINFO"},
  {handle_cmd_join, "JOIN"},
  {handle_cmd_part, "PART"},
  {handle_cmd_quit, "QUIT"},
@@ -942,12 +1115,7 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 }
 
 
-int faispaschier = 0;
 
-void kaka(void) {
-  if (!faispaschier)
-    abort();
-}
 
 int main(int argc, char **argv) {
   fd_set fds, wfds;
@@ -960,24 +1128,20 @@ int main(int argc, char **argv) {
   ghl_ch_t *ch;
   cell_t iter;
   sockinfo_t *si;
-  atexit(kaka);
   
   if (argc != 2) {
     printf("usage: %s <tunnel interface to use>\n", argv[0]);
-    faispaschier = 1;
     exit(-1);
   }
   strncpy(tun_name, argv[1], IFNAMSIZ);
   snprintf(fwdtun_name, IFNAMSIZ, "%s-ctrl", argv[1]);
   tun_fd = tun_alloc(tun_name);
   if (tun_fd == -1) {
-    faispaschier = 1;
     perror("tun_alloc");
     exit(-1);
   }
   fwdtun_fd = tun_alloc(fwdtun_name);
   if (fwdtun_fd == -1) {
-    faispaschier = 1;
     perror("fwdtun_alloc");
     exit(-1);
   }
@@ -1148,6 +1312,5 @@ int main(int argc, char **argv) {
   garena_fini();
   endwin();
   printf("bye...\n");
-  faispaschier = 1;
   return 0;
 }

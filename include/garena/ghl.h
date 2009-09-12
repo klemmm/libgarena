@@ -27,6 +27,8 @@
 #define GHL_EV_RES_SUCCESS 0
 #define GHL_EV_RES_FAILURE -1
 
+#define GHL_ROOMINFO_QUERY_INTERVAL 30
+
 typedef int ghl_timerfun_t(void *privdata);
 
 typedef struct {
@@ -48,10 +50,22 @@ typedef struct {
   void *privdata;
 } ghl_handler_t;
 
-
-typedef struct ghl_myinfo_s {
-  unsigned int id;
+typedef struct {
+  uint32_t unknown1;
+  unsigned int user_id;
+  char name[17];
+  char country[3];
+  char unknown2;  
+  char level;
+  char unknown3;
+  struct in_addr external_ip;
+  int external_port;
+  struct in_addr internal_ip;
+  int internal_port;
+  uint16_t unknown4;
+  char unknown5[3];
 } ghl_myinfo_t;
+
 
 typedef struct ghl_ctx_s {
   int servsock;
@@ -60,14 +74,11 @@ typedef struct ghl_ctx_s {
   int server_ip;
   unsigned char session_key[GSP_KEYSIZE];
   unsigned char session_iv[GSP_IVSIZE];
-  char myname[17];
-  char md5pass[16];
   int auth_ok;
   int lookup_ok;
   int connected;
+  char md5pass[GSP_PWHASHSIZE >> 1];
   ghl_myinfo_t my_info;
-  struct in_addr my_external_ip;
-  int my_external_port;
   struct ghl_rh_s *room;
   ghl_handler_t ghl_handlers[GHL_EV_NUM];
   gp2pp_handtab_t *gp2pp_htab;
@@ -75,7 +86,8 @@ typedef struct ghl_ctx_s {
   gsp_handtab_t *gsp_htab;
   ghl_timer_t *hello_timer;
   ghl_timer_t *conn_retrans_timer;
-  hash_t roominfo;
+  ghl_timer_t *roominfo_timer;
+  ihash_t roominfo;
 } ghl_ctx_t;
 
 
