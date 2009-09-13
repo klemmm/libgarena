@@ -499,9 +499,9 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
     }
     screen_output(&screen, "\n");
 
-    snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.29.%u netmask 255.255.255.0", tun_name, join->rh->me->virtual_suffix);
+    snprintf(cmd, 128, "sudo ifconfig %s 192.168.29.%u netmask 255.255.255.0", tun_name, join->rh->me->virtual_suffix);
     system(cmd);
-    snprintf(cmd, 128, "/sbin/ifconfig %s 192.168.28.%u netmask 255.255.255.0", fwdtun_name, join->rh->me->virtual_suffix);
+    snprintf(cmd, 128, "sudo ifconfig %s 192.168.28.%u netmask 255.255.255.0", fwdtun_name, join->rh->me->virtual_suffix);
     system(cmd);
   } else {
     screen_output(&screen, "Room join failed\n");
@@ -1471,7 +1471,7 @@ void client_loop() {
 }
 
 int main(int argc, char **argv) {
-  /* debut du code execute en root */
+
   int as_root = 0;
   ghl_ch_t *ch;
   cell_t iter;
@@ -1498,14 +1498,15 @@ int main(int argc, char **argv) {
   }
   /* fin du code execute en root */
   
-  /*
   if (getuid() != 0) {
     drop_privileges();
   } else as_root = 1;
-  */
 
   roomlist = read_roomlist();
-  garena_init();
+  if (garena_init() == -1) {
+    garena_perror("garena_init");
+    exit(-1);
+  }
   
   max_conn_pkt = ghl_max_conn_pkt(MTU);
   screen_init(&screen);

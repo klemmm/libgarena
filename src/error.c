@@ -26,9 +26,9 @@ static char *errstr[] = {
  */
 void garena_perror(char *msg) {
   if (garena_errno == GARENA_ERR_LIBC) {
-    fprintf(deb, "%s: libc error: %s\n", msg, strerror(errno));
+    fprintf(stderr, "%s: libc error: %s\n", msg, strerror(errno));
   } else {
-    fprintf(deb, "%s: garena error: %s\n", msg, errstr[-garena_errno]);
+    fprintf(stderr, "%s: garena error: %s\n", msg, errstr[-garena_errno]);
   }
 }  
 

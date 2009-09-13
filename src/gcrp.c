@@ -142,7 +142,7 @@ int gcrp_input(gcrp_handtab_t *htab, char *buf, unsigned int length, void *roomd
   } else {
     
     if (htab->gcrp_handlers[hdr->msgtype].fun(hdr->msgtype, buf + sizeof(gcrp_hdr_t), length - sizeof(gcrp_hdr_t), htab->gcrp_handlers[hdr->msgtype].privdata, roomdata) == -1) {
-      garena_perror("[WARN/GCRP] Error while handling message");
+/*      garena_perror("[WARN/GCRP] Error while handling message");*/
       return -1;
     }
   }
