@@ -892,15 +892,21 @@ typedef struct {
 
 
 int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
-  if (parc != 3) {
-    screen_output(screen, "Usage: /CONNECT <your nick> <your pass>");
+  char pass[256];
+  if (parc != 2) {
+    screen_output(screen, "Usage: /CONNECT <your nick>\n");
     return -1;
   }
   if (ctx != NULL) {
     screen_output(screen, "You are already connected\n");
     return -1;
   }
-  ctx = ghl_new_ctx(parv[1], parv[2], inet_addr("74.55.122.122"), 0, 0);
+  mvwprintw(screen->cmd, 1, 0, "Password: ");
+  wgetnstr(screen->cmd, pass, sizeof(pass));
+  mvwhline(screen->cmd, 1, 0, ' ', COLS);
+  mvwprintw(screen->cmd, 1, 0, "> ");
+
+  ctx = ghl_new_ctx(parv[1], pass, inet_addr("74.55.122.122"), 0, 0);
   if (ctx == NULL) {
     screen_output(screen, "Context creation failed\n");
     return -1;
