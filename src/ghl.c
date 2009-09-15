@@ -1310,6 +1310,7 @@ int ghl_process(ghl_ctx_t *ctx, fd_set *fds) {
     stuff_to_do = 0;
     for (iter = llist_iter(timers); iter; iter = llist_next(iter)) {
       cur = llist_val(iter);
+      printf("teste timer\n");
       if (now >= cur->when) {
         if (cur->fun(cur->privdata) == -1) {
           perror("[GHL/ERR] a timer was not handled correctly");
