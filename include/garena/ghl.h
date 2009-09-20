@@ -5,6 +5,7 @@
 #include <garena/gp2pp.h>
 #include <garena/gsp.h>
 #include <garena/util.h>
+#include <sys/select.h>
 
 
 #define GHL_JOIN_TIMEOUT 6
@@ -100,12 +101,12 @@ typedef struct ghl_rh_s {
   unsigned int room_id;
   struct ghl_member_s *me;
   ghl_serv_t *serv;
-  llist_t members;
+  ihash_t members;
   int got_welcome, got_members;
   ghl_timer_t *timeout;
   int joined;
   char welcome[GCRP_MAX_MSGSIZE];
-  llist_t conns;
+  ihash_t conns;
 } ghl_room_t;
 
 typedef struct ghl_member_s {
@@ -247,5 +248,6 @@ void ghl_conn_close(ghl_serv_t *serv, ghl_ch_t *ch);
 int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int length);
 ghl_ch_t *ghl_conn_from_id(ghl_room_t *rh, unsigned int conn_id);
 unsigned int ghl_max_conn_pkt(unsigned int mtu);
+int ghl_num_members(ghl_serv_t *serv, unsigned int room_id);
 
 #endif

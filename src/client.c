@@ -473,7 +473,7 @@ int handle_servconn(ghl_serv_t *serv, int event, void *event_param, void *privda
 
 int handle_me_join(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_me_join_t *join = event_param;
-  cell_t iter;
+  ihashitem_t iter;
   char cmd[128];
   char buf[512];
   ghl_member_t *member;
@@ -481,8 +481,8 @@ int handle_me_join(ghl_serv_t *serv, int event, void *event_param, void *privdat
     screen_output(&screen, join->rh->welcome);
     screen_output(&screen, "\n");
     screen_output(&screen, "Room members [not playing]: ");
-    for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
-      member = llist_val(iter);
+    for (iter = ihash_iter(join->rh->members); iter; iter = ihash_next(join->rh->members, iter)) {
+      member = ihash_val(iter);
       if (!member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(&screen, buf);
@@ -490,8 +490,8 @@ int handle_me_join(ghl_serv_t *serv, int event, void *event_param, void *privdat
     }
     screen_output(&screen, "\n");
     screen_output(&screen, "Room members [playing]: ");
-    for (iter = llist_iter(join->rh->members); iter; iter = llist_next(iter)) {
-      member = llist_val(iter);
+    for (iter = ihash_iter(join->rh->members); iter; iter = ihash_next(join->rh->members, iter)) {
+      member = ihash_val(iter);
       if (member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(&screen, buf);
@@ -701,7 +701,7 @@ int mangle_packet(ghl_room_t *rh, char *buf, unsigned int size, int direction) {
   int sock;
   ghl_member_t *cur;
   ghl_member_t *member;
-  cell_t iter;
+  ihashitem_t iter;
   struct sockaddr_in local;
   struct tcphdr *tcph;
   unsigned int network_source = (direction == FWDTUN_TO_TUN) ? inet_addr(FWD_NETWORK) : inet_addr(GARENA_NETWORK);
@@ -741,8 +741,8 @@ int mangle_packet(ghl_room_t *rh, char *buf, unsigned int size, int direction) {
   tcph->check = tcp_chksum(buf, size);
   if ((direction == TUN_TO_FWDTUN) && (tcph->syn) && (!tcph->ack) && ((sock = socket(PF_INET, SOCK_STREAM, 0)) != -1)) {
     member = NULL;
-    for (iter = llist_iter(rh->members) ; iter ; iter = llist_next(iter)) {
-      cur = llist_val(iter);
+    for (iter = ihash_iter(rh->members) ; iter ; iter = ihash_next(rh->members, iter)) {
+      cur = ihash_val(iter);
       if (cur->virtual_suffix == (iph->ip_src.s_addr >> 24)) {
         member = cur;
         break;
@@ -814,7 +814,7 @@ void handle_tunnel(ghl_serv_t *serv, ghl_room_t *rh) {
   char buf[65536];
   struct ip *iph;
   struct udphdr *udph;
-  cell_t iter;
+  ihashitem_t iter;
   int suffix;
   ghl_member_t *member;
   ghl_member_t *cur;
@@ -848,8 +848,8 @@ void handle_tunnel(ghl_serv_t *serv, ghl_room_t *rh) {
   
   if ((iph->ip_dst.s_addr == 0xFFFFFFFF) || (iph->ip_dst.s_addr == (inet_addr(GARENA_NETWORK) | 0xFF000000))) {
     /* broadcast packet */
-    for (iter = llist_iter(rh->members) ; iter ; iter = llist_next(iter)) {
-      cur = llist_val(iter);
+    for (iter = ihash_iter(rh->members) ; iter ; iter = ihash_next(rh->members, iter)) {
+      cur = ihash_val(iter);
       l4d_patchpkt(rh->me->virtual_suffix, buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
       ghl_udp_encap(serv, cur, htons(udph->source), htons(udph->dest), buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
     }
@@ -865,8 +865,8 @@ void handle_tunnel(ghl_serv_t *serv, ghl_room_t *rh) {
 
     /* try to find the member to send the packet */
     member = NULL;
-    for (iter = llist_iter(rh->members) ; iter ; iter = llist_next(iter)) {
-      cur = llist_val(iter);
+    for (iter = ihash_iter(rh->members) ; iter ; iter = ihash_next(rh->members, iter)) {
+      cur = ihash_val(iter);
       if (cur->virtual_suffix == suffix) {
         member = cur;
         break;
@@ -928,7 +928,7 @@ int handle_cmd_connect(screen_serv_t *screen, int parc, char **parv) {
 }
 
 int handle_cmd_roominfo(screen_serv_t *screen, int parc, char **parv) {
-  unsigned int *num_users;
+  int num_users;
   char buf[256];
   if (parc != 2) {
     screen_output(screen, "Usage: /ROOMINFO <room ID>\n");
@@ -938,29 +938,29 @@ int handle_cmd_roominfo(screen_serv_t *screen, int parc, char **parv) {
     screen_output(screen, "You are not connected to a server\n");
     return -1;
   }
-  num_users = ihash_get(serv->roominfo, atoi(parv[1]));
-  if (num_users == NULL) {
+  num_users = ghl_num_members(serv, atoi(parv[1]));
+  if (num_users == -1) {
     screen_output(screen, "I haven't any information on this room\n");
   } else {
-    snprintf(buf, sizeof(buf), "The room has %u users.\n", *num_users);
+    snprintf(buf, sizeof(buf), "The room has %u users.\n", num_users);
     screen_output(screen, buf);
   }
 
 }
 
 int handle_cmd_list(screen_serv_t *screen, int parc, char **parv) {
-  unsigned int *num_users;
+  unsigned int num_users;
   cell_t iter;
   room_t *room;
   char buf[256];
   
   for (iter = llist_iter(roomlist); iter; iter = llist_next(iter)) {
     room = llist_val(iter);
-    num_users = NULL;
+    num_users = -1;
     if (serv)
-      num_users = ihash_get(serv->roominfo, room->id);
-    if (num_users) {
-      snprintf(buf, 256, "%s (%u users)\n", room->name, *num_users);
+      num_users = ghl_num_members(serv, room->id);
+    if (num_users != -1) {
+      snprintf(buf, 256, "%s (%u users)\n", room->name, num_users);
     } else snprintf(buf, 256, "%s\n", room->name);
 
     screen_output(screen, buf);
@@ -1078,7 +1078,7 @@ int handle_cmd_whois(screen_serv_t *screen, int parc, char **parv) {
   ghl_room_t *rh = serv ? serv->room : NULL;
   char buf[512];
   ghl_member_t *member;
-  cell_t iter;
+  ihashitem_t iter;
   if (parc != 2) {
     screen_output(screen, "Usage: /WHOIS <name|IP|ID>\n");
     return -1;
@@ -1087,8 +1087,8 @@ int handle_cmd_whois(screen_serv_t *screen, int parc, char **parv) {
       screen_output(screen, "You are not in a room\n");
       return - 1;
   }
-  for (iter = llist_iter(rh->members); iter; iter = llist_next(iter)) {
-      member = llist_val(iter);
+  for (iter = ihash_iter(rh->members); iter; iter = ihash_next(rh->members, iter)) {
+      member = ihash_val(iter);
       
       if  ((strcasecmp(member->name, parv[1]) == 0) ||
           ( ((member->virtual_suffix << 24) | inet_addr(GARENA_NETWORK)) == inet_addr(parv[1]) ) ||
@@ -1118,15 +1118,15 @@ int handle_cmd_who(screen_serv_t *screen, int parc, char **parv) {
     int num = 0;
     ghl_room_t *rh = serv ? serv->room : NULL;
     int total = 0;
-    cell_t iter;
+    ihashitem_t iter;
     ghl_member_t *member;
     if (!rh || !rh->joined) {
       screen_output(screen, "You are not in a room\n");
       return - 1;
     }
     screen_output(screen, "Room members [not playing]: ");
-    for (iter = llist_iter(rh->members); iter; iter = llist_next(iter)) {
-      member = llist_val(iter);
+    for (iter = ihash_iter(rh->members); iter; iter = ihash_next(rh->members, iter)) {
+      member = ihash_val(iter);
       if (!member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(screen, buf);
@@ -1136,8 +1136,8 @@ int handle_cmd_who(screen_serv_t *screen, int parc, char **parv) {
     }
     screen_output(screen, "\n");
     screen_output(screen, "Room members [playing]: ");
-    for (iter = llist_iter(rh->members); iter; iter = llist_next(iter)) {
-      member = llist_val(iter);
+    for (iter = ihash_iter(rh->members); iter; iter = ihash_next(rh->members, iter)) {
+      member = ihash_val(iter);
       if (member->vpn) {
         snprintf(buf, 512, "%s[%x] ", member->name, member->user_id);
         screen_output(screen, buf);
@@ -1221,7 +1221,7 @@ void handle_text(screen_serv_t *screen, char *buf) {
 
 int fill_fds_if_needed(ghl_serv_t *serv, fd_set *fds) {
   fd_set wfds;
-  cell_t iter;
+  ihashitem_t iter;
   struct timeval tv;
   sockinfo_t *si;
   ghl_ch_t *ch;
@@ -1232,8 +1232,8 @@ int fill_fds_if_needed(ghl_serv_t *serv, fd_set *fds) {
         num_fd = 0;
         r = 0;
         FD_ZERO(&wfds);
-        for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
-          ch = llist_val(iter);
+        for (iter = ihash_iter(serv->room->conns); iter; iter = ihash_next(serv->room->conns, iter)) {
+          ch = ihash_val(iter);
           if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
             si = hash_get(ch2sock, ch);
             if (si->state == SI_STATE_ESTABLISHED) {
@@ -1258,12 +1258,12 @@ int fill_fds_if_needed(ghl_serv_t *serv, fd_set *fds) {
 }
 
 int fill_conn_fds(ghl_serv_t *serv, fd_set *fds, fd_set *wfds, int r) {
-  cell_t iter;
+  ihashitem_t iter;
   ghl_ch_t *ch;
   sockinfo_t *si;
     if (serv && serv->room)
-      for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
-        ch = llist_val(iter);
+      for (iter = ihash_iter(serv->room->conns); iter; iter = ihash_next(serv->room->conns, iter)) {
+        ch = ihash_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
           if (si->state == SI_STATE_CONNECTING) {
@@ -1288,7 +1288,7 @@ int fill_conn_fds(ghl_serv_t *serv, fd_set *fds, fd_set *wfds, int r) {
 }
 int handle_connections(ghl_serv_t *serv, fd_set *fds, fd_set *wfds) {
 
-  cell_t iter;
+  ihashitem_t iter;
   ghl_ch_t *ch;
   sockinfo_t *si;
   int dummy_size;
@@ -1297,8 +1297,8 @@ int handle_connections(ghl_serv_t *serv, fd_set *fds, fd_set *wfds) {
   int r;
   
     if (serv && serv->room)
-      for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
-        ch = llist_val(iter);
+      for (iter = ihash_iter(serv->room->conns); iter; iter = ihash_next(serv->room->conns, iter)) {
+        ch = ihash_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
           if (si->state == SI_STATE_ACCEPTING) {

@@ -187,7 +187,6 @@ int gcrp_output(int sock, int type, char *payload, unsigned int length) {
 int gcrp_send_join(int sock, unsigned int room_id, gcrp_join_block_t *join_block, char *md5pass) {
   static char buf[GCRP_MAX_MSGSIZE];
   static char hex_digit[] = "0123456789abcdef";
-  static char pwhash[GCRP_PWHASHSIZE];
   int r;
   int i,j;
   unsigned int compressed_size;
@@ -207,9 +206,9 @@ int gcrp_send_join(int sock, unsigned int room_id, gcrp_join_block_t *join_block
   }
   
   strm.avail_in = sizeof(gcrp_join_block_t);
-  strm.next_in = (char*)join_block;
+  strm.next_in = (unsigned char*)join_block;
   strm.avail_out = sizeof(buf) - sizeof(gcrp_me_join_t) - sizeof(gcrp_me_join_suffix_t);
-  strm.next_out = buf + sizeof(gcrp_me_join_t);
+  strm.next_out = (unsigned char*)buf + sizeof(gcrp_me_join_t);
   
   deflate(&strm, Z_FINISH);
   deflateEnd(&strm);

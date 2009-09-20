@@ -202,14 +202,7 @@ void llist_empty_val(llist_t desc) {
 }  
 
 static unsigned int ihash_func(ihash_keytype id) {
- char *buf = (char*) &id;
- unsigned int i;
- unsigned int res = 0;
- for (i = 0; i < sizeof(ihash_keytype); i++)
- {
-   res = res ^ buf[i];
- }
- return(res);
+  return (id ^ (id >> 8) ^ (id >> 16) ^ (id >> 24));
 } 
 
 int ihash_num(ihash_t ihash) {
@@ -241,6 +234,41 @@ int ihash_put(ihash_t ihash, ihash_keytype key, void *value) {
   ihash->h[hv] = item;
 
   return 0;
+}
+
+int ihash_is_empty(ihash_t ihash) {
+  int i;
+  for (i = 0; i < ihash->size; i++) {
+    if (ihash->h[i] != NULL)
+      return 0;
+  }
+  return 1;
+}
+ihashitem_t ihash_iter(ihash_t ihash) {
+  int i;
+  for (i = 0; i < ihash->size; i++) {
+    if (ihash->h[i] != NULL)
+      return ihash->h[i];
+  }
+  return NULL;
+}
+
+ihashitem_t ihash_next(ihash_t ihash, ihashitem_t iter) {
+  ihashitem_t tmp;
+  int i;
+  if (iter->next != NULL)
+    return iter->next;
+  
+  for (i = (ihash_func(iter->key) % ihash->size) + 1; i < ihash->size; i++) {
+    if (ihash->h[i] != NULL)
+      return ihash->h[i];
+  }
+  return NULL;
+}
+
+
+void *ihash_val(ihashitem_t item) {
+  return item->value;
 }
 
 void *ihash_get(ihash_t ihash, ihash_keytype key) {

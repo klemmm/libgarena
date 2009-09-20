@@ -51,8 +51,7 @@ static int handle_ip_lookup(int type, void *payload, unsigned int length, void *
 static int handle_roominfo(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote);
 static int handle_initconn_msg(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote);
 static void update_next(ghl_serv_t *serv, ghl_ch_t *ch);
-static void try_deliver_one(ghl_serv_t *serv);
-static int can_deliver_one(ghl_serv_t *serv);
+static void try_deliver(ghl_serv_t *serv);
 static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 static int handle_conn_data_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
@@ -64,6 +63,14 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
 
 
 /* API (public) functions defitinions */
+
+
+int ghl_num_members(ghl_serv_t *serv, unsigned int room_id) {
+  int *num_members = ihash_get(serv->roominfo, room_id);
+  if (num_members == NULL)
+    return -1;
+  return *num_members;
+}
 
 /**
  * Free the GHL part of the library.
@@ -387,14 +394,14 @@ ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned
   rh->room_id = room_id;
   rh->me = NULL;
   
-  rh->members = llist_alloc();
+  rh->members = ihash_init();
   if (rh->members == NULL) {
     garena_errno = GARENA_ERR_NORESOURCE;
     close(rh->roomsock);
     free(rh);
     return NULL;
   }
-  rh->conns = llist_alloc();
+  rh->conns = ihash_init();
   if (rh->conns == NULL) {
     garena_errno = GARENA_ERR_NORESOURCE;
     close(rh->roomsock);
@@ -422,15 +429,11 @@ ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned
  * @return Pointer to the member object, or NULL in case of error.
  */
 ghl_member_t *ghl_member_from_id(ghl_room_t *rh, unsigned int user_id) {
-  cell_t iter;
-  ghl_member_t *cur;
-  for (iter = llist_iter(rh->members); iter ; iter = llist_next(iter)) {
-    cur = llist_val(iter);
-    if (cur->user_id == user_id)
-      return cur;
-  }
-  garena_errno = GARENA_ERR_NOTFOUND;
-  return NULL;
+  ghl_member_t *member;
+  member = ihash_get(rh->members, user_id);
+  if (member == NULL)
+    garena_errno = GARENA_ERR_NOTFOUND;
+  return member;
 }
 
 /**
@@ -445,15 +448,11 @@ ghl_member_t *ghl_member_from_id(ghl_room_t *rh, unsigned int user_id) {
  * @param Pointer to the connection handle, or NULL in case of error.
  */
 ghl_ch_t *ghl_conn_from_id(ghl_room_t *rh, unsigned int conn_id) {
-  cell_t iter;
-  ghl_ch_t *cur;
-  for (iter=llist_iter(rh->conns); iter; iter = llist_next(iter)) {
-    cur = llist_val(iter);
-    if (cur->conn_id == conn_id)
-      return cur;
-  }
-  garena_errno = GARENA_ERR_NOTFOUND;
-  return NULL;
+  ghl_ch_t *conn;
+  conn = ihash_get(rh->conns, conn_id);
+  if (conn == NULL)
+    garena_errno = GARENA_ERR_NOTFOUND;
+  return conn;
 }
 
  
@@ -689,7 +688,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
       serv->servsock = -1;
     }
   }
-  try_deliver_one(serv);
+  try_deliver(serv);
 
   return 0;
 }
@@ -910,7 +909,7 @@ ghl_ch_t *ghl_conn_connect(ghl_serv_t *serv, ghl_member_t *member, int port) {
   ch->rcv_next_deliver = 0;
   ch->ts_ack = time(NULL);
   ch->conn_id = gp2pp_new_conn_id();
-  llist_add_head(rh->conns, ch);
+  ihash_put(rh->conns, ch->conn_id, ch);
   
 
   remote.sin_family = AF_INET;
@@ -919,7 +918,7 @@ ghl_ch_t *ghl_conn_connect(ghl_serv_t *serv, ghl_member_t *member, int port) {
   if (gp2pp_send_initconn(serv->peersock, serv->my_info.user_id, ch->conn_id, port, GP2PP_MAGIC_LOCALIP, &remote) == -1) {
     llist_free(ch->sendq);
     llist_free(ch->recvq);
-    llist_del_item(rh->conns, ch);
+    ihash_del(rh->conns, ch->conn_id);
     free(ch);
     return NULL;
   } else return ch;
@@ -1087,22 +1086,22 @@ static void member_extract(ghl_member_t *dst, gcrp_member_t *src) {
 
 
 static int ghl_free_room(ghl_room_t *rh) {
-  cell_t iter;
+  ihashitem_t iter;
   ghl_ch_t *ch;
   close(rh->roomsock);
   
-  for (iter = llist_iter(rh->members); iter; iter = llist_next(iter)) {
-    free(llist_val(iter));
+  for (iter = ihash_iter(rh->members); iter; iter = ihash_next(rh->members, iter)) {
+    free(ihash_val(iter));
   }
 
-  for (iter = llist_iter(rh->conns); iter; iter = llist_next(iter)) {
-    ch = llist_val(iter);
+  for (iter = ihash_iter(rh->conns); iter; iter = ihash_next(rh->conns, iter)) {
+    ch = ihash_val(iter);
     conn_free(ch);
     
   }
   
-  llist_free(rh->members);
-  llist_free(rh->conns);
+  ihash_free(rh->members);
+  ihash_free(rh->conns);
   if (rh->timeout)
     ghl_free_timer(rh->timeout);
   rh->serv->room = NULL;
@@ -1134,15 +1133,15 @@ static void send_hello(ghl_serv_t *serv, ghl_member_t *cur) {
 }
 
 static void send_hello_to_all(ghl_serv_t *serv) {
-  cell_t iter2;
+  ihashitem_t iter2;
   ghl_member_t *cur;
   ghl_room_t *rh = serv->room; 
   if (rh == NULL)
     return;
   
   
-  for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
-    cur = llist_val(iter2);
+  for (iter2 = ihash_iter(rh->members); iter2 ; iter2 = ihash_next(rh->members, iter2)) {
+    cur = ihash_val(iter2);
     if (cur->user_id == serv->my_info.user_id)
       continue;
     send_hello(serv, cur);
@@ -1163,8 +1162,6 @@ static int signal_event(ghl_serv_t *serv, int event, void *eventparam) {
 
 static void update_next(ghl_serv_t *serv, ghl_ch_t *ch) {
   cell_t iter;
-  ghl_conn_recv_t conn_recv_ev;
-  ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
   
   if (llist_is_empty(ch->recvq))
@@ -1180,10 +1177,9 @@ static void update_next(ghl_serv_t *serv, ghl_ch_t *ch) {
   }
 }
 
-static void try_deliver_one(ghl_serv_t *serv) {
-  int seq;
+static void try_deliver(ghl_serv_t *serv) {
   cell_t iter;
-  cell_t c_iter;
+  ihashitem_t c_iter;
   ghl_conn_recv_t conn_recv_ev;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
@@ -1194,12 +1190,12 @@ static void try_deliver_one(ghl_serv_t *serv) {
   if (serv->room == NULL)
     return;
     
-  if (llist_is_empty(serv->room->conns))
+  if (ihash_is_empty(serv->room->conns))
     return;
     
    
-  for (c_iter = llist_iter(serv->room->conns); c_iter; c_iter = llist_next(c_iter)) {
-    ch = llist_val(c_iter);
+  for (c_iter = ihash_iter(serv->room->conns); c_iter; c_iter = ihash_next(serv->room->conns, c_iter)) {
+    ch = ihash_val(c_iter);
     if (llist_is_empty(ch->recvq))
       continue;
 
@@ -1251,47 +1247,17 @@ static void try_deliver_one(ghl_serv_t *serv) {
 }
 
 
-static int can_deliver_one(ghl_serv_t *serv) {
-  int seq;
-  cell_t iter;
-  cell_t c_iter;
-  ghl_conn_recv_t conn_recv_ev;
-  ghl_conn_fin_t conn_fin_ev;
-  ghl_ch_pkt_t *pkt;
-  ghl_ch_pkt_t *todel = NULL;
-  ghl_ch_t *ch = NULL;
-
-  if (serv->room == NULL)
-    return 0;
-    
-  if (llist_is_empty(serv->room->conns))
-    return 0;
-   
-  for (c_iter = llist_iter(serv->room->conns); c_iter; c_iter = llist_next(c_iter)) {
-    ch = llist_val(c_iter);
-    if (llist_is_empty(ch->recvq))
-      continue;
-
-    seq = ch->rcv_next_deliver;
-    pkt = llist_head(ch->recvq);
-    if (pkt->seq == ch->rcv_next_deliver)
-      return 1;
-    
-  }
-  return 0;
-}
-
 
 static void send_hello_to_members(ghl_room_t *rh) {
-  cell_t iter2;
+  ihashitem_t iter2;
   ghl_serv_t *serv = rh->serv;
   ghl_member_t *cur;
   struct sockaddr_in remote;
   
   remote.sin_family = AF_INET;
   
-  for (iter2 = llist_iter(rh->members); iter2 ; iter2 = llist_next(iter2)) {
-    cur = llist_val(iter2);
+  for (iter2 = ihash_iter(rh->members); iter2 ; iter2 = ihash_next(rh->members, iter2)) {
+    cur = ihash_val(iter2);
     if (cur->user_id == serv->my_info.user_id)
       continue;
     
@@ -1367,7 +1333,7 @@ static int handle_servconn_timeout(void *privdata) {
 static int do_conn_retrans(void *privdata) {
   ghl_serv_t *serv = privdata;
   cell_t iter2;
-  cell_t iter;
+  ihashitem_t iter;
   ghl_ch_t *ch;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
@@ -1380,14 +1346,14 @@ static int do_conn_retrans(void *privdata) {
     serv->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
     return 0;
   }
-  for (iter = llist_iter(rh->conns); iter; iter = llist_next(iter)) {
+  for (iter = ihash_iter(rh->conns); iter; iter = ihash_next(rh->conns, iter)) {
     if (todel) {
-      llist_del_item(rh->conns, todel);
+      ihash_del(rh->conns, todel->conn_id);
       conn_free(todel);
       todel = NULL;
     }
 
-    ch = llist_val(iter);
+    ch = ihash_val(iter);
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
       if ((pkt->seq - ch->snd_una) > GP2PP_MAX_IN_TRANSIT) {
@@ -1419,7 +1385,7 @@ static int do_conn_retrans(void *privdata) {
   }
   
   if (todel) {
-    llist_del_item(rh->conns, todel);
+    ihash_del(rh->conns, todel->conn_id);
     conn_free(todel);
     todel = NULL;
   }
@@ -1558,7 +1524,7 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
   conn_incoming_ev.ch->conn_id = ghtonl(initconn->conn_id);
   conn_incoming_ev.dport = ghtons(initconn->dport);
-  llist_add_head(rh->conns, conn_incoming_ev.ch);
+  ihash_put(rh->conns, conn_incoming_ev.ch->conn_id, conn_incoming_ev.ch);
   signal_event(serv, GHL_EV_CONN_INCOMING, &conn_incoming_ev);
   return 0;
 }
@@ -1826,7 +1792,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
       for (i = 0; i < ghtonl(memberlist->num_members); i++) {
         member = malloc(sizeof(ghl_member_t));
         member_extract(member, memberlist->members + i);
-        llist_add_head(rh->members, member);
+        ihash_put(rh->members, member->user_id, member);
 
         IFDEBUG(printf("[GHL] Room member: %s\n", member->name));
         
@@ -1836,10 +1802,15 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
       }
       
       if (rh->me == NULL) {
-        fprintf(deb, "[GHL/ERROR] Joined a room, but we are not in the member list. Leaving now.\n");
+        fprintf(deb, "[GHL/ERROR] Joined a room, but we are not in the member list.\n");
         garena_errno = GARENA_ERR_PROTOCOL;
-        llist_empty_val(rh->members);
-        return -1;
+        join.result = GHL_EV_RES_FAILURE;
+         join.rh = rh;
+         ghl_free_timer(rh->timeout);
+         rh->timeout = NULL;
+         err |= (signal_event(rh->serv, GHL_EV_ME_JOIN, &join) == -1);
+         err |= (ghl_free_room(rh) == -1);
+         return err ? -1 : 0;
       }
       serv->my_info.user_id = rh->me->user_id;
       rh->got_members = 1;
@@ -1857,7 +1828,6 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
       ghl_free_timer(rh->timeout);
       rh->timeout = NULL;
       err |= (signal_event(rh->serv, GHL_EV_ME_JOIN, &join) == -1);
-      rh->timeout = NULL; /* prevent ghl_free_room from deleting the timer we are currently handling */
       err |= (ghl_free_room(rh) == -1);
       return err ? -1 : 0;
       
@@ -1891,7 +1861,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
   ghl_member_t *member;
   ghl_talk_t talk_ev;
   ghl_part_t part_ev;
-  cell_t iter;
+  ihashitem_t iter;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_t *todel;
   ghl_ch_t *conn;
@@ -1902,7 +1872,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
     case GCRP_MSG_JOIN:
       member = malloc(sizeof(ghl_member_t));
       member_extract(member, join);
-      llist_add_head(rh->members, member);
+      ihash_put(rh->members, member->user_id, member);
       join_ev.rh = rh;
       join_ev.member = member;
       signal_event(serv, GHL_EV_JOIN, &join_ev);
@@ -1968,16 +1938,16 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
       part_ev.member = member;
       part_ev.rh = rh;
       signal_event(serv, GHL_EV_PART, &part_ev);
-      llist_del_item(rh->members, member);
+      ihash_del(rh->members, member->user_id);
       todel = NULL;
-      for (iter = llist_iter(rh->conns); iter; iter = llist_next(iter)) {
+      for (iter = ihash_iter(rh->conns); iter; iter = ihash_next(rh->conns, iter)) {
         if (todel) {
-          llist_del_item(rh->conns, conn);
+          ihash_del(rh->conns, conn->conn_id);
           conn_free(conn);
           todel = NULL;
         }
 
-        conn = llist_val(iter);
+        conn = ihash_val(iter);
         if (conn->member == member) {
            if (conn->cstate != GHL_CSTATE_CLOSING_OUT) {
              conn_fin_ev.ch = conn;
@@ -1987,7 +1957,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
         }
       }
       if (todel) {
-        llist_del_item(rh->conns, conn);
+        ihash_del(rh->conns, conn->conn_id);
         conn_free(conn);
         todel = NULL;
       }

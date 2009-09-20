@@ -38,5 +38,9 @@ int ihash_del(ihash_t ihash, ihash_keytype key);
 void ihash_free(ihash_t ihash);
 void ihash_free_val(ihash_t ihash);
 ihash_t ihash_init();
+ihashitem_t ihash_iter(ihash_t ihash);
+ihashitem_t ihash_next(ihash_t ihash, ihashitem_t iter);
+void *ihash_val(ihashitem_t item);
+int ihash_is_empty(ihash_t ihash);
 
 #endif
