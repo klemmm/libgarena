@@ -3,6 +3,12 @@
 #include <garena/util.h>
 
 
+/**
+ * @file
+ *
+ * This file implements linked-list and hashtable data structures.
+ */
+ 
 struct cell_s {
   void *val;
   struct cell_s *next;

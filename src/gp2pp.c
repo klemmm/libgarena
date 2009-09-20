@@ -155,7 +155,7 @@ int gp2pp_input(gp2pp_handtab_t *htab, char *buf, unsigned int length, struct so
   * @return 0 for success, -1 for failure
   */
 int gp2pp_output(int sock, int type, char *payload, unsigned int length, int user_id, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
   int hdrsize = sizeof(gp2pp_hdr_t);
     
@@ -177,7 +177,7 @@ int gp2pp_output(int sock, int type, char *payload, unsigned int length, int use
 }
 
 int gp2pp_output_conn(int sock, int subtype, char *payload, unsigned int length, int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   int type = GP2PP_MSG_CONN_PKT;
   gp2pp_conn_hdr_t *conn_hdr = (gp2pp_conn_hdr_t *) buf;
   int hdrsize = sizeof(gp2pp_conn_hdr_t);
@@ -205,7 +205,7 @@ int gp2pp_output_conn(int sock, int subtype, char *payload, unsigned int length,
 }
 
 int gp2pp_send_initconn(int sock, int from_ID, unsigned int conn_id, int dport, int sip, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_initconn_t *initconn = (gp2pp_initconn_t *) buf;
   initconn->mbz = 0;
   initconn->conn_id = ghtonl(conn_id);
@@ -225,7 +225,7 @@ int gp2pp_send_initconn(int sock, int from_ID, unsigned int conn_id, int dport, 
  */
  
 int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hello_rep_t *hello_rep = (gp2pp_hello_rep_t *) buf;
   hello_rep->user_id = to_ID;
   hello_rep->mbz = 0;
@@ -233,7 +233,7 @@ int gp2pp_send_hello_reply(int sock, int from_ID, int to_ID, struct sockaddr_in 
 }
 
 int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hello_req_t *hello_req = (gp2pp_hello_req_t *) buf;
   hello_req->mbz = 0;
   hello_req->mbz2 = 0;
@@ -241,7 +241,7 @@ int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote) 
 }
 
 int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, unsigned int length, struct sockaddr_in *remote) {
-  static char buf[GP2PP_MAX_MSGSIZE];
+  char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_udp_encap_t *udp_encap = (gp2pp_udp_encap_t *) buf;
   if (length + sizeof(gp2pp_udp_encap_t) > sizeof(buf)) {
     garena_errno = GARENA_ERR_INVALID;

@@ -1,4 +1,4 @@
- /**
+ /*
   * @file
   * File implementing the Garena ChatRoom Protocol (GCRP)
   */
@@ -160,7 +160,7 @@ int gcrp_input(gcrp_handtab_t *htab, char *buf, unsigned int length, void *roomd
   * @return 0 for success, -1 for failure
   */
 int gcrp_output(int sock, int type, char *payload, unsigned int length) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   gcrp_hdr_t *hdr = (gcrp_hdr_t *) buf;
   if (length + sizeof(gcrp_hdr_t) > GCRP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
@@ -185,7 +185,7 @@ int gcrp_output(int sock, int type, char *payload, unsigned int length) {
  * @return 0 for succes, -1 for failure
  */
 int gcrp_send_join(int sock, unsigned int room_id, gcrp_join_block_t *join_block, char *md5pass) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   static char hex_digit[] = "0123456789abcdef";
   int r;
   int i,j;
@@ -240,7 +240,7 @@ int gcrp_send_join(int sock, unsigned int room_id, gcrp_join_block_t *join_block
  * @return 0 for succes, -1 for failure
  */
 int gcrp_send_talk(int sock, unsigned int room_id, int user_id, char *text) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   gcrp_talk_t *talk = (gcrp_talk_t *) buf;
   talk->room_id = ghtonl(room_id);
   talk->user_id = ghtonl(user_id);
@@ -258,7 +258,7 @@ int gcrp_send_talk(int sock, unsigned int room_id, int user_id, char *text) {
  * @return 0 for succes, -1 for failure
  */
 int gcrp_send_togglevpn(int sock, int user_id, int vpn) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   gcrp_togglevpn_t *toggle = (gcrp_togglevpn_t *) buf;
   toggle->user_id = ghtonl(user_id);
   return gcrp_output(sock, vpn ? GCRP_MSG_STARTVPN : GCRP_MSG_STOPVPN, buf, sizeof(gcrp_togglevpn_t));
@@ -272,7 +272,7 @@ int gcrp_send_togglevpn(int sock, int user_id, int vpn) {
  * @return 0 for succes, -1 for failure
  */
 int gcrp_send_part(int sock, int user_id) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   gcrp_part_t *part = (gcrp_part_t *) buf;
   part->user_id = ghtonl(user_id);
   return gcrp_output(sock, GCRP_MSG_PART, buf, sizeof(gcrp_part_t));

@@ -7,7 +7,6 @@
  * and GCRP to manage details of the protocol.
  */
  
- 
 /* includes */
 
 #include <stdio.h>
@@ -25,6 +24,9 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <mhash.h>
+
+/* documentation */
+
 
 /* static globals */
 
@@ -65,10 +67,19 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
 /* API (public) functions defitinions */
 
 
+/**
+ * Get the number of users on a room.
+ *
+ * @param serv The server handle
+ * @param room_id The room ID
+ * @return Number of users, or -1 for error.
+ */
 int ghl_num_members(ghl_serv_t *serv, unsigned int room_id) {
   int *num_members = ihash_get(serv->roominfo, room_id);
-  if (num_members == NULL)
+  if (num_members == NULL) {
+    garena_errno = GARENA_ERR_NOTFOUND;
     return -1;
+  }
   return *num_members;
 }
 
@@ -614,7 +625,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
   int now = time(NULL);
   ghl_timer_t *cur;
   ghl_room_disc_t room_disc_ev;
-  
+  ghl_me_join_t join;  
   /* process timers */
   do {
     stuff_to_do = 0;
@@ -662,11 +673,19 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
     if (r != -1) {
       gcrp_input(serv->gcrp_htab, buf, r, serv->room);
     } else {
-      room_disc_ev.rh = serv->room;
-      signal_event(serv, GHL_EV_ROOM_DISC, &room_disc_ev);
-      ghl_free_room(serv->room);
-      serv->room = NULL;
-      
+      if (serv->room->joined) {
+        room_disc_ev.rh = serv->room;
+        signal_event(serv, GHL_EV_ROOM_DISC, &room_disc_ev);
+        ghl_free_room(serv->room);
+        serv->room = NULL;
+      } else {
+        join.result = GHL_EV_RES_FAILURE;
+        join.rh = serv->room;
+        ghl_free_timer(serv->room->timeout);
+        serv->room->timeout = NULL;
+        signal_event(serv, GHL_EV_ME_JOIN, &join);
+        ghl_free_room(serv->room);
+      }
     }
   }
 
@@ -947,7 +966,7 @@ void ghl_conn_close(ghl_serv_t *serv, ghl_ch_t *ch) {
 
 /**
  *
- * Sends a segment on a virtual connection.
+ * Sends a data segment on a virtual connection.
  *
  * @par Errors
  *
@@ -1845,7 +1864,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
 
 
 static int handle_room_activity(int type, void *payload, unsigned int length, void *privdata, void *roomdata) {
-  static char buf[GCRP_MAX_MSGSIZE];
+  char buf[GCRP_MAX_MSGSIZE];
   gcrp_join_t *join = payload;
   gcrp_part_t *part = payload;
   gcrp_talk_t *talk = payload;

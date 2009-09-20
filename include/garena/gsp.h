@@ -1,3 +1,8 @@
+
+/**
+ * The header file for the Garena Server Protocol module.
+ */
+ 
 #ifndef GARENA_GSP_H
 #define GARENA_GSP_H 1
 
@@ -11,8 +16,7 @@
 
 #define GSP_PORT 7456
 
-
-#define GSP_MAX_MSGSIZE 65536
+#define GSP_MAX_MSGSIZE 8192
 #define GSP_MSG_LOGIN 0x1F
 #define GSP_MSG_AUTH_FAIL 0x2E
 #define GSP_MSG_LOGIN_REPLY 0x45

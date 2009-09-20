@@ -125,7 +125,7 @@ int gsp_read(int sock, char *buf, unsigned int length) {
 int gsp_input(gsp_handtab_t *htab, char *buf, unsigned int length, unsigned char *key, unsigned char *iv) {
   AES_KEY aeskey;
   unsigned char tmp_iv[GSP_IVSIZE];
-  static unsigned char plaintext[GSP_MAX_MSGSIZE];
+  unsigned char plaintext[GSP_MAX_MSGSIZE];
   uint32_t *size = (uint32_t *) buf;
   gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
   
@@ -174,9 +174,9 @@ int gsp_input(gsp_handtab_t *htab, char *buf, unsigned int length, unsigned char
   * @return 0 for success, -1 for failure
   */
 int gsp_output(int sock, int type, char *payload, unsigned int length, unsigned char *key, unsigned char *iv) {
-  static unsigned char plaintext[GSP_MAX_MSGSIZE];
-  static unsigned char ciphertext[GSP_MAX_MSGSIZE];
-  static unsigned char tmp_iv[GSP_IVSIZE];
+  unsigned char plaintext[GSP_MAX_MSGSIZE];
+  unsigned char ciphertext[GSP_MAX_MSGSIZE];
+  unsigned char tmp_iv[GSP_IVSIZE];
   gsp_hdr_t *hdr = (gsp_hdr_t *) plaintext;
   AES_KEY aeskey;
   uint32_t *size = (uint32_t *) ciphertext;
