@@ -355,25 +355,42 @@ int resolve(char *addr) {
   return(inet_addr(addr));
 }     
 
-
-int ip_chksum(char *buffer, int l)
-{
-  u_short *w = (u_short *)buffer;
-  int sum    = 0;
-  u_short pad_val;
-  int pad = l % 2;
-  if (pad) {
-    pad_val = buffer[l - 1];
-  }
-   
-  l >>= 1;
-  while( l-- )
-    sum += *w++;   
-  
-  if (pad)
-    sum += pad_val;
+inline int ip_hdr_chksum(char *buf) {
+  u_short *words = (u_short *) buf;
+  int sum = (words[0] + words[1] + words[2] + words[3] + words[4] + words[5]
+  + words[6] + words[7] + words[8] + words[9]);
   sum = (sum >> 16) + (sum & 0xffff);
   return(~((sum >> 16) + sum));
+ 
+}
+
+int ip_chksum(char *buffer, int l) {
+  int i, sum;
+  int remainder = l % 20;   
+  int limit = l - remainder;
+  int pad = l % 2;
+  u_short pad_val;
+  u_short *words;
+  sum = 0;
+  for (i = 0; i < limit; i += 20) {
+    words = (u_short*) (&buffer[i]);
+    sum += (words[0] + words[1] + words[2] + words[3] + words[4] + words[5]
+    + words[6] + words[7] + words[8] + words[9]);
+  }
+  if (remainder != 0) {
+    if (pad) {
+      pad_val = buffer[l-1];
+    }
+    words = (u_short *) (&buffer[i]);
+    remainder >>= 1;   
+    while (remainder--)
+      sum += *words++;
+    if (pad)
+      sum += pad_val;
+  }
+  sum = (sum >> 16) + (sum & 0xffff);
+  return(~((sum >> 16) + sum));
+ 
 }
 
 
@@ -568,7 +585,7 @@ int handle_udp_encap(ghl_serv_t *serv, int event, void *event_param, void *privd
   iph->ip_sum = 0;
   iph->ip_src.s_addr = (udp_encap->member->virtual_suffix << 24) | inet_addr(GARENA_NETWORK);
   iph->ip_dst.s_addr = (routing_host != INADDR_NONE) ? routing_host : ((rh->me->virtual_suffix << 24) | inet_addr(GARENA_NETWORK));
-  iph->ip_sum = ip_chksum(buf, sizeof(struct ip));
+  iph->ip_sum = ip_hdr_chksum(buf);
   
   udph->source = htons(udp_encap->sport);
   udph->dest = htons(udp_encap->dport);
@@ -736,7 +753,7 @@ int mangle_packet(ghl_room_t *rh, char *buf, unsigned int size, int direction) {
     tcph->dest = MAP(tcph->dest);
   }
   iph->ip_sum = 0;
-  iph->ip_sum = ip_chksum((char*) buf, sizeof(struct ip));
+  iph->ip_sum = ip_hdr_chksum((char*) buf);
   tcph->check = 0;
   tcph->check = tcp_chksum(buf, size);
   if ((direction == TUN_TO_FWDTUN) && (tcph->syn) && (!tcph->ack) && ((sock = socket(PF_INET, SOCK_STREAM, 0)) != -1)) {

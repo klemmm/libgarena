@@ -51,7 +51,7 @@ static int handle_ip_lookup(int type, void *payload, unsigned int length, void *
 static int handle_roominfo(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote);
 static int handle_initconn_msg(int type, void *payload, unsigned int length, void *privdata, unsigned int user_id, struct sockaddr_in *remote);
 static void update_next(ghl_serv_t *serv, ghl_ch_t *ch);
-static void try_deliver(ghl_serv_t *serv);
+static void try_deliver(ghl_serv_t *serv, ghl_ch_t *conn);
 static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
 static int handle_conn_data_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote);
@@ -688,7 +688,6 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
       serv->servsock = -1;
     }
   }
-  try_deliver(serv);
 
   return 0;
 }
@@ -1177,73 +1176,64 @@ static void update_next(ghl_serv_t *serv, ghl_ch_t *ch) {
   }
 }
 
-static void try_deliver(ghl_serv_t *serv) {
+static void try_deliver(ghl_serv_t *serv, ghl_ch_t *ch) {
   cell_t iter;
   ihashitem_t c_iter;
   ghl_conn_recv_t conn_recv_ev;
   ghl_conn_fin_t conn_fin_ev;
   ghl_ch_pkt_t *pkt;
   ghl_ch_pkt_t *todel = NULL;
-  ghl_ch_t *ch = NULL;
   int r;
   
-  if (serv->room == NULL)
-    return;
-    
-  if (ihash_is_empty(serv->room->conns))
-    return;
-    
-   
-  for (c_iter = ihash_iter(serv->room->conns); c_iter; c_iter = ihash_next(serv->room->conns, c_iter)) {
-    ch = ihash_val(c_iter);
-    if (llist_is_empty(ch->recvq))
-      continue;
 
-    todel = NULL;
-    for (iter = llist_iter(ch->recvq); iter ; iter = llist_next(iter)) {
-      pkt = llist_val(iter);
-      if (todel) {
-        llist_del_item(ch->recvq, todel);
-        free(todel->payload);
-        free(todel);
-        todel = NULL;
-      }
-      if (pkt->seq != ch->rcv_next_deliver)
-        break;
+  if (llist_is_empty(ch->recvq))
+    return;
+
+  for (iter = llist_iter(ch->recvq); iter ; iter = llist_next(iter)) {
+    pkt = llist_val(iter);
+    if (todel) {
+      llist_del_item(ch->recvq, todel);
+      free(todel->payload);
+      free(todel);
+      todel = NULL;
+    }
+      
+    if (pkt->seq != ch->rcv_next_deliver)
+      break;
         
-      if (pkt->length > 0) {
-        conn_recv_ev.ch = ch;
-        conn_recv_ev.payload = pkt->payload;
-        conn_recv_ev.length = pkt->length;
-        r = pkt->length;
-        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-           r = signal_event(serv, GHL_EV_CONN_RECV, &conn_recv_ev);
-        }
+    if (pkt->length > 0) {
+      conn_recv_ev.ch = ch;
+      conn_recv_ev.payload = pkt->payload;
+      conn_recv_ev.length = pkt->length;
+      r = pkt->length;
+      if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+        r = signal_event(serv, GHL_EV_CONN_RECV, &conn_recv_ev);
+      }
             
-        if (r == pkt->length) {
-          todel = pkt;
-          ch->rcv_next_deliver++;
-        } else if (r != -1) {
-          memmove(pkt->payload, pkt->payload + r, pkt->length - r);
-          pkt->length -= r;
-        }
-      } else {
-        conn_fin_ev.ch = ch;
-        if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
-          ch->cstate = GHL_CSTATE_CLOSING_OUT;
-          signal_event(serv, GHL_EV_CONN_FIN, &conn_fin_ev);
-        }
+      if (r == pkt->length) {
         todel = pkt;
         ch->rcv_next_deliver++;
+      } else if (r != -1) {
+        memmove(pkt->payload, pkt->payload + r, pkt->length - r);
+        pkt->length -= r;
       }
-    }
-    if (todel) {
-        llist_del_item(ch->recvq, todel);
-        free(todel->payload);
-        free(todel);
-        todel = NULL;
+    } else {
+      conn_fin_ev.ch = ch;
+      if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+        ch->cstate = GHL_CSTATE_CLOSING_OUT;
+        signal_event(serv, GHL_EV_CONN_FIN, &conn_fin_ev);
+      }
+      todel = pkt;
+      ch->rcv_next_deliver++;
     }
   }
+  if (todel) {
+    llist_del_item(ch->recvq, todel);
+    free(todel->payload);
+    free(todel);
+    todel = NULL;
+  }
+  
 }
 
 
@@ -1550,7 +1540,9 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   if ((ch->cstate == GHL_CSTATE_CLOSING_OUT) || (ch->cstate == GHL_CSTATE_CLOSING_IN))
     return 0;
   ch->cstate = GHL_CSTATE_CLOSING_IN;
-
+  /* WTF: CLOSING_IN and CLOSING_OUT states are basically the same, because the FIN packet does not carry a sequence number
+   * so the FIN sequence number is set to recv_next, so try_deliver() will set state to CLOSING_OUT immediately.
+   * This may change in the future (the linux client should set the SEQ correctly on FIN packet) */
   pkt = malloc(sizeof(ghl_ch_pkt_t));
   pkt->length = 0;
   pkt->did_fast_retrans = 0;
@@ -1561,7 +1553,8 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->ts_rel = ts_rel;
   pkt->ch = ch;
   insert_pkt(ch->recvq, pkt);
-    update_next(serv, ch);
+  update_next(serv, ch);
+  try_deliver(serv, ch);
   ch->finseq = seq1;
   return 0;
 }
@@ -1688,6 +1681,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
     insert_pkt(ch->recvq, pkt);
     update_next(serv, ch); 
+    try_deliver(serv, ch);
   }
   
   remote->sin_port = htons(ch->member->external_port);
