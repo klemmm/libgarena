@@ -153,8 +153,6 @@ int gp2pp_register_conn_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_conn_fun
 int gp2pp_unregister_conn_handler(gp2pp_handtab_t *tab,int msgtype);
 void* gp2pp_conn_handler_privdata(gp2pp_handtab_t *tab, int msgtype);
 gp2pp_handtab_t *gp2pp_alloc_handtab (void);
-int gp2pp_init();
-void gp2pp_fini();
 int gp2pp_new_conn_id(void);
 
 #endif

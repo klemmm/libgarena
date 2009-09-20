@@ -127,8 +127,6 @@ int gcrp_send_togglevpn(int sock, int user_id, int vpn);
 int gcrp_send_part(int sock, int user_id);
 int gcrp_send_talk(int sock, unsigned int room_id, int user_id, char *text);
 gcrp_handtab_t *gcrp_alloc_handtab (void);
-int gcrp_init();
-void gcrp_fini();
 int gcrp_tochar(char *dst, char *src, size_t size);
 int gcrp_fromchar(char *dst, char *src, size_t size);
 

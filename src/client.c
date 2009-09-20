@@ -58,17 +58,17 @@ unsigned int max_conn_pkt;
 unsigned int routing_host=INADDR_NONE;
 
 int quit = 0;
-int need_free_ctx = 0;
+int need_free_serv = 0;
 
 typedef struct  {
   WINDOW *text;
   WINDOW *cmd;
   struct termios attr;
-} screen_ctx_t;
+} screen_serv_t;
 
 
-ghl_ctx_t *ctx = NULL;
-screen_ctx_t screen;
+ghl_serv_t *serv = NULL;
+screen_serv_t screen;
 
 #define HASH_SIZE 256
 
@@ -252,7 +252,7 @@ hash_t hash_init() {
   return(hash);
 }
 
-void screen_init(screen_ctx_t *screen) {
+void screen_init(screen_serv_t *screen) {
   initscr();
   cbreak();
   noecho();
@@ -270,13 +270,13 @@ void screen_init(screen_ctx_t *screen) {
 
 
 
-void screen_output(screen_ctx_t *screen, char *buf) {
+void screen_output(screen_serv_t *screen, char *buf) {
     wprintw(screen->text, "%s", buf);
     wrefresh(screen->text);
     wrefresh(screen->cmd);
 }
 
-int screen_input(screen_ctx_t *screen, char *buf, int len) {
+int screen_input(screen_serv_t *screen, char *buf, int len) {
     static int cur = 0;
     int x,y;
     int tmp;
@@ -387,7 +387,7 @@ static int set_nonblock(int sock) {
   return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 }
 
-int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_conn_incoming(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   int sock;
   int r;
   ghl_conn_incoming_t *conn_incoming = event_param;
@@ -419,11 +419,11 @@ int handle_conn_incoming(ghl_ctx_t *ctx, int event, void *event_param, void *pri
     }
   }
   
-  ghl_conn_close(ctx, conn_incoming->ch);
+  ghl_conn_close(serv, conn_incoming->ch);
   return 0;
 }
 
-int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_conn_fin(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   sockinfo_t *si;
   ghl_conn_fin_t *conn_fin = event_param;
   ghl_ch_t *ch = conn_fin->ch;
@@ -442,7 +442,7 @@ int handle_conn_fin(ghl_ctx_t *ctx, int event, void *event_param, void *privdata
   return 0;
 }
 
-int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_conn_recv(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   char *buf;
   int r;
   ghl_conn_recv_t *conn_recv = event_param;
@@ -458,20 +458,20 @@ int handle_conn_recv(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   return r;
 }
 
-int handle_servconn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_servconn(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   char buf[256];
   ghl_servconn_t *servconn = event_param;
   if (servconn->result == GHL_EV_RES_SUCCESS) {
-    snprintf(buf, sizeof(buf), "Connected to server (my external ip/port is %s:%u).\n", inet_ntoa(ctx->my_info.external_ip), ctx->my_info.external_port);
+    snprintf(buf, sizeof(buf), "Connected to server (my external ip/port is %s:%u).\n", inet_ntoa(serv->my_info.external_ip), serv->my_info.external_port);
     screen_output(&screen, buf);
   } else {
     screen_output(&screen, "Connection to server failed.\n");
-    need_free_ctx = 1;
+    need_free_serv = 1;
   }
   return 0;
 }
 
-int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_me_join(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_me_join_t *join = event_param;
   cell_t iter;
   char cmd[128];
@@ -509,7 +509,7 @@ int handle_me_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata)
   return 0;
 }
 
-int handle_talk(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_talk(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_talk_t *talk = event_param;
   char buf[512];
   snprintf(buf, 512, "%x <%s> %s\n", talk->rh->room_id, talk->member->name, talk->text);
@@ -517,7 +517,7 @@ int handle_talk(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   return 0;
 }
 
-int handle_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_join(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_join_t *join = event_param;
   char buf[512];
   snprintf(buf, 512, "%x %s[%x] joined the room.\n", join->rh->room_id, join->member->name, join->member->user_id);
@@ -525,7 +525,7 @@ int handle_join(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   return 0;
 }
 
-int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_part(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_part_t *part = event_param;
   char buf[512];
   snprintf(buf, 512, "%x %s left the room.\n", part->rh->room_id, part->member->name);
@@ -533,18 +533,18 @@ int handle_part(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
   return 0;
 }
 
-int handle_disc(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_disc(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   screen_output(&screen, "Lost connection to room server.\n");
   return 0;
 }
 
-int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_udp_encap(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_udp_encap_t *udp_encap = event_param;
   struct ip *iph;
   struct udphdr *udph;
-  ghl_rh_t *rh;
+  ghl_room_t *rh;
   char *buf;
-  rh = ctx ? ctx->room : NULL;
+  rh = serv ? serv->room : NULL;
   if (rh == NULL) {
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
@@ -585,7 +585,7 @@ int handle_udp_encap(ghl_ctx_t *ctx, int event, void *event_param, void *privdat
   return 0;
 }
 
-int handle_togglevpn(ghl_ctx_t *ctx, int event, void *event_param, void *privdata) {
+int handle_togglevpn(ghl_serv_t *serv, int event, void *event_param, void *privdata) {
   ghl_togglevpn_t *togglevpn = event_param;
   char buf[512];
   snprintf(buf, 512, "%x %s %s a game.\n", togglevpn->rh->room_id, togglevpn->member->name, togglevpn->vpn ? "started" : "stopped");
@@ -691,7 +691,7 @@ int tcp_chksum(char *buffer, int length) {
 
 #define FWDTUN_TO_TUN 0
 #define TUN_TO_FWDTUN 1
-int mangle_packet(ghl_rh_t *rh, char *buf, unsigned int size, int direction) {
+int mangle_packet(ghl_room_t *rh, char *buf, unsigned int size, int direction) {
   struct ip *iph;
   int r;
   struct sockaddr_in remote;
@@ -773,7 +773,7 @@ int mangle_packet(ghl_rh_t *rh, char *buf, unsigned int size, int direction) {
           si->servsock = -1;
         }
   
-        si->ch = ghl_conn_connect(rh->ctx, member, htons(MAP(tcph->dest)));
+        si->ch = ghl_conn_connect(rh->serv, member, htons(MAP(tcph->dest)));
         if (si->ch != NULL) {
           hash_put(ch2sock, si->ch, si);
       fprintf(deb,"Adding SI for: %x (accept)\n", si->ch->conn_id);
@@ -797,7 +797,7 @@ int mangle_packet(ghl_rh_t *rh, char *buf, unsigned int size, int direction) {
   return 1;  
 }
 
-void handle_fwd_tunnel(ghl_rh_t *rh) {
+void handle_fwd_tunnel(ghl_room_t *rh) {
   char buf[65536];
   int r;
   if (rh == NULL)
@@ -810,7 +810,7 @@ void handle_fwd_tunnel(ghl_rh_t *rh) {
 }
 
 
-void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
+void handle_tunnel(ghl_serv_t *serv, ghl_room_t *rh) {
   char buf[65536];
   struct ip *iph;
   struct udphdr *udph;
@@ -851,7 +851,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
     for (iter = llist_iter(rh->members) ; iter ; iter = llist_next(iter)) {
       cur = llist_val(iter);
       l4d_patchpkt(rh->me->virtual_suffix, buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
-      ghl_udp_encap(ctx, cur, htons(udph->source), htons(udph->dest), buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
+      ghl_udp_encap(serv, cur, htons(udph->source), htons(udph->dest), buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
     }
     return;
   } else {
@@ -876,7 +876,7 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
       return;
     }
     l4d_patchpkt(rh->me->virtual_suffix, buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
-    ghl_udp_encap(ctx, member, htons(udph->source), htons(udph->dest), buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
+    ghl_udp_encap(serv, member, htons(udph->source), htons(udph->dest), buf + sizeof(struct ip) + sizeof(struct udphdr), r - sizeof(struct ip) - sizeof(struct udphdr));
     return;
   }
 }
@@ -884,20 +884,20 @@ void handle_tunnel(ghl_ctx_t *ctx, ghl_rh_t *rh) {
 #define MAX_CMDS 12
 #define MAX_PARAMS 16
 
-typedef int cmdfun_t(screen_ctx_t *screen, int parc, char **parv);
+typedef int cmdfun_t(screen_serv_t *screen, int parc, char **parv);
 typedef struct {
   cmdfun_t *fun;
   char *str;
 } cmd_t;
 
 
-int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_connect(screen_serv_t *screen, int parc, char **parv) {
   char pass[256];
   if (parc != 2) {
     screen_output(screen, "Usage: /CONNECT <your nick>\n");
     return -1;
   }
-  if (ctx != NULL) {
+  if (serv != NULL) {
     screen_output(screen, "You are already connected\n");
     return -1;
   }
@@ -906,39 +906,39 @@ int handle_cmd_connect(screen_ctx_t *screen, int parc, char **parv) {
   mvwhline(screen->cmd, 1, 0, ' ', COLS);
   mvwprintw(screen->cmd, 1, 0, "> ");
 
-  ctx = ghl_new_ctx(parv[1], pass, inet_addr("74.55.122.122"), 0, 0);
-  if (ctx == NULL) {
+  serv = ghl_new_serv(parv[1], pass, inet_addr("74.55.122.122"), 0, 0);
+  if (serv == NULL) {
     screen_output(screen, "Context creation failed\n");
     return -1;
   }
   
-  ghl_register_handler(ctx, GHL_EV_SERVCONN, handle_servconn, NULL);
-  ghl_register_handler(ctx, GHL_EV_ME_JOIN, handle_me_join, NULL);
-  ghl_register_handler(ctx, GHL_EV_TALK, handle_talk, NULL);
-  ghl_register_handler(ctx, GHL_EV_JOIN, handle_join, NULL);
-  ghl_register_handler(ctx, GHL_EV_PART, handle_part, NULL);
-  ghl_register_handler(ctx, GHL_EV_ROOM_DISC, handle_disc, NULL);
-  ghl_register_handler(ctx, GHL_EV_TOGGLEVPN, handle_togglevpn, NULL);
-  ghl_register_handler(ctx, GHL_EV_UDP_ENCAP, handle_udp_encap, NULL);
+  ghl_register_handler(serv, GHL_EV_SERVCONN, handle_servconn, NULL);
+  ghl_register_handler(serv, GHL_EV_ME_JOIN, handle_me_join, NULL);
+  ghl_register_handler(serv, GHL_EV_TALK, handle_talk, NULL);
+  ghl_register_handler(serv, GHL_EV_JOIN, handle_join, NULL);
+  ghl_register_handler(serv, GHL_EV_PART, handle_part, NULL);
+  ghl_register_handler(serv, GHL_EV_ROOM_DISC, handle_disc, NULL);
+  ghl_register_handler(serv, GHL_EV_TOGGLEVPN, handle_togglevpn, NULL);
+  ghl_register_handler(serv, GHL_EV_UDP_ENCAP, handle_udp_encap, NULL);
 
-  ghl_register_handler(ctx, GHL_EV_CONN_INCOMING, handle_conn_incoming, NULL);
-  ghl_register_handler(ctx, GHL_EV_CONN_RECV, handle_conn_recv, NULL);
-  ghl_register_handler(ctx, GHL_EV_CONN_FIN, handle_conn_fin, NULL);
+  ghl_register_handler(serv, GHL_EV_CONN_INCOMING, handle_conn_incoming, NULL);
+  ghl_register_handler(serv, GHL_EV_CONN_RECV, handle_conn_recv, NULL);
+  ghl_register_handler(serv, GHL_EV_CONN_FIN, handle_conn_fin, NULL);
   return 0;
 }
 
-int handle_cmd_roominfo(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_roominfo(screen_serv_t *screen, int parc, char **parv) {
   unsigned int *num_users;
   char buf[256];
   if (parc != 2) {
     screen_output(screen, "Usage: /ROOMINFO <room ID>\n");
     return -1;
   }
-  if ((ctx == NULL) || (ctx->connected == 0)){
+  if ((serv == NULL) || (serv->connected == 0)){
     screen_output(screen, "You are not connected to a server\n");
     return -1;
   }
-  num_users = ihash_get(ctx->roominfo, atoi(parv[1]));
+  num_users = ihash_get(serv->roominfo, atoi(parv[1]));
   if (num_users == NULL) {
     screen_output(screen, "I haven't any information on this room\n");
   } else {
@@ -948,7 +948,7 @@ int handle_cmd_roominfo(screen_ctx_t *screen, int parc, char **parv) {
 
 }
 
-int handle_cmd_list(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_list(screen_serv_t *screen, int parc, char **parv) {
   unsigned int *num_users;
   cell_t iter;
   room_t *room;
@@ -957,8 +957,8 @@ int handle_cmd_list(screen_ctx_t *screen, int parc, char **parv) {
   for (iter = llist_iter(roomlist); iter; iter = llist_next(iter)) {
     room = llist_val(iter);
     num_users = NULL;
-    if (ctx)
-      num_users = ihash_get(ctx->roominfo, room->id);
+    if (serv)
+      num_users = ihash_get(serv->roominfo, room->id);
     if (num_users) {
       snprintf(buf, 256, "%s (%u users)\n", room->name, *num_users);
     } else snprintf(buf, 256, "%s\n", room->name);
@@ -971,12 +971,12 @@ int handle_cmd_list(screen_ctx_t *screen, int parc, char **parv) {
 
 
 
-int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_join(screen_serv_t *screen, int parc, char **parv) {
   unsigned int serv_ip;
   int room_id;
   room_t *room; 
   cell_t iter;
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+  ghl_room_t *rh = serv ? serv->room : NULL;
   if ((parc != 3) && (parc != 2)) {
     screen_output(screen, "Usage: /JOIN <room server IP> <room ID>\n");
     screen_output(screen, "Or: /JOIN <room alias>\n");
@@ -1013,11 +1013,11 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
     }
     return -1;
   }
-  if ((ctx == NULL) || (ctx->connected == 0)){
+  if ((serv == NULL) || (serv->connected == 0)){
     screen_output(screen, "You are not connected to a server\n");
     return -1;
   }
-  rh = ghl_join_room(ctx, serv_ip, 8687, room_id);
+  rh = ghl_join_room(serv, serv_ip, 8687, room_id);
   if (rh == NULL) {
     screen_output(screen, "error\n");
     screen_output(screen, garena_strerror());
@@ -1026,8 +1026,8 @@ int handle_cmd_join(screen_ctx_t *screen, int parc, char **parv) {
   return 0;
 }
 
-int handle_cmd_part(screen_ctx_t *screen, int parc, char **parv) {
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+int handle_cmd_part(screen_serv_t *screen, int parc, char **parv) {
+  ghl_room_t *rh = serv ? serv->room : NULL;
   if (rh && rh->joined) {
     ghl_leave_room(rh);
     rh = NULL;
@@ -1036,8 +1036,8 @@ int handle_cmd_part(screen_ctx_t *screen, int parc, char **parv) {
   return -1;
 }
 
-int handle_cmd_startgame(screen_ctx_t *screen, int parc, char **parv) {
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+int handle_cmd_startgame(screen_serv_t *screen, int parc, char **parv) {
+  ghl_room_t *rh = serv ? serv->room : NULL;
   if (rh && rh->joined) {
     ghl_togglevpn(rh, 1);
     return 0;
@@ -1045,8 +1045,8 @@ int handle_cmd_startgame(screen_ctx_t *screen, int parc, char **parv) {
   return -1;
 }
 
-int handle_cmd_stopgame(screen_ctx_t *screen, int parc, char **parv) {
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+int handle_cmd_stopgame(screen_serv_t *screen, int parc, char **parv) {
+  ghl_room_t *rh = serv ? serv->room : NULL;
   if (rh && rh->joined) {
     ghl_togglevpn(rh, 0);
     return 0;
@@ -1054,12 +1054,12 @@ int handle_cmd_stopgame(screen_ctx_t *screen, int parc, char **parv) {
   return -1;
 }
 
-int handle_cmd_quit(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_quit(screen_serv_t *screen, int parc, char **parv) {
   quit = 1;
   return 0;
 }
 
-int handle_cmd_routing(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_routing(screen_serv_t *screen, int parc, char **parv) {
   char buf[512];
   if (parc == 1) {
     screen_output(screen, "Routing is now disabled\n");
@@ -1074,8 +1074,8 @@ int handle_cmd_routing(screen_ctx_t *screen, int parc, char **parv) {
   return 0;
 }
 
-int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+int handle_cmd_whois(screen_serv_t *screen, int parc, char **parv) {
+  ghl_room_t *rh = serv ? serv->room : NULL;
   char buf[512];
   ghl_member_t *member;
   cell_t iter;
@@ -1113,10 +1113,10 @@ int handle_cmd_whois(screen_ctx_t *screen, int parc, char **parv) {
 
 }
 
-int handle_cmd_who(screen_ctx_t *screen, int parc, char **parv) {
+int handle_cmd_who(screen_serv_t *screen, int parc, char **parv) {
     char buf[512];
     int num = 0;
-    ghl_rh_t *rh = ctx ? ctx->room : NULL;
+    ghl_room_t *rh = serv ? serv->room : NULL;
     int total = 0;
     cell_t iter;
     ghl_member_t *member;
@@ -1168,7 +1168,7 @@ cmd_t cmdtab[MAX_CMDS] = {
  {NULL, NULL}
 };
  
-void handle_command(screen_ctx_t *screen, char *buf) {
+void handle_command(screen_serv_t *screen, char *buf) {
   char tmp[512];
   int i;
   int state = 0;
@@ -1208,8 +1208,8 @@ void handle_command(screen_ctx_t *screen, char *buf) {
 }
 
 
-void handle_text(screen_ctx_t *screen, char *buf) {
-  ghl_rh_t *rh = ctx ? ctx->room : NULL;
+void handle_text(screen_serv_t *screen, char *buf) {
+  ghl_room_t *rh = serv ? serv->room : NULL;
   if (strlen(buf) == 0)
     return;
   if (rh && rh->joined) {
@@ -1219,7 +1219,7 @@ void handle_text(screen_ctx_t *screen, char *buf) {
 
 
 
-int fill_fds_if_needed(ghl_ctx_t *ctx, fd_set *fds) {
+int fill_fds_if_needed(ghl_serv_t *serv, fd_set *fds) {
   fd_set wfds;
   cell_t iter;
   struct timeval tv;
@@ -1227,12 +1227,12 @@ int fill_fds_if_needed(ghl_ctx_t *ctx, fd_set *fds) {
   ghl_ch_t *ch;
   int num_fd;
   int r; 
-    if (ctx) {
-      if (ctx->room) {
+    if (serv) {
+      if (serv->room) {
         num_fd = 0;
         r = 0;
         FD_ZERO(&wfds);
-        for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+        for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
           ch = llist_val(iter);
           if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
             si = hash_get(ch2sock, ch);
@@ -1248,21 +1248,21 @@ int fill_fds_if_needed(ghl_ctx_t *ctx, fd_set *fds) {
         tv.tv_usec = 0;
         r = select(r+1, NULL, &wfds, NULL, &tv);
         if (r == num_fd) {
-          r = ghl_fill_fds(ctx, fds);
+          r = ghl_fill_fds(serv, fds);
         } else {
           r = 0;
         }
-      } else r = ghl_fill_fds(ctx, fds);
+      } else r = ghl_fill_fds(serv, fds);
     } else r = 0;
   return r;   
 }
 
-int fill_conn_fds(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds, int r) {
+int fill_conn_fds(ghl_serv_t *serv, fd_set *fds, fd_set *wfds, int r) {
   cell_t iter;
   ghl_ch_t *ch;
   sockinfo_t *si;
-    if (ctx && ctx->room)
-      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+    if (serv && serv->room)
+      for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
         ch = llist_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
@@ -1286,7 +1286,7 @@ int fill_conn_fds(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds, int r) {
       }
   return r;
 }
-int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
+int handle_connections(ghl_serv_t *serv, fd_set *fds, fd_set *wfds) {
 
   cell_t iter;
   ghl_ch_t *ch;
@@ -1296,8 +1296,8 @@ int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
   char buf[4096];
   int r;
   
-    if (ctx && ctx->room)
-      for (iter = llist_iter(ctx->room->conns); iter; iter = llist_next(iter)) {
+    if (serv && serv->room)
+      for (iter = llist_iter(serv->room->conns); iter; iter = llist_next(iter)) {
         ch = llist_val(iter);
         if (ch->cstate == GHL_CSTATE_ESTABLISHED) {
           si = hash_get(ch2sock, ch);
@@ -1309,7 +1309,7 @@ int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
   fprintf(deb, "freeing SI because the accept failed, connid:  %x\n", ch->conn_id);
   fflush(deb);
                 
-                ghl_conn_close(ctx, ch);
+                ghl_conn_close(serv, ch);
                 if (si->sock != -1)
                   close(si->sock);
                 if (si->servsock != -1)
@@ -1337,7 +1337,7 @@ int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
                 /* close */
                 fprintf(deb, "freeing SI because the connect failed,: %x\n", si->ch->conn_id);
                 fflush(deb);
-                ghl_conn_close(ctx, ch);
+                ghl_conn_close(serv, ch);
                 if (si->sock != -1)
                   close(si->sock);
                 if (si->servsock != -1)
@@ -1357,11 +1357,11 @@ int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
             if (FD_ISSET(si->sock, fds)) {
               r = read(si->sock, buf, max_conn_pkt);
               if (r > 0) {
-                ghl_conn_send(ctx, ch, buf, r);
+                ghl_conn_send(serv, ch, buf, r);
               } else {
               fprintf(deb, "freeing SI because normal close: %x\n", si->ch->conn_id);
               fflush(deb);
-                ghl_conn_close(ctx, ch);
+                ghl_conn_close(serv, ch);
                 if (si->sock != -1)
                   close(si->sock);
                 if (si->servsock != -1)
@@ -1385,9 +1385,9 @@ int handle_connections(ghl_ctx_t *ctx, fd_set *fds, fd_set *wfds) {
 int prepare_fds(fd_set *fds, fd_set *wfds) {
   int r;
     
-    r = fill_fds_if_needed(ctx, fds);
+    r = fill_fds_if_needed(serv, fds);
     
-    r = fill_conn_fds(ctx, fds, wfds, r);
+    r = fill_conn_fds(serv, fds, wfds, r);
 
    return r; 
 
@@ -1403,7 +1403,7 @@ int process_input(fd_set *fds, fd_set *wfds) {
   
     
     r = prepare_fds(fds, wfds);
-    has_timer = ctx ? ghl_fill_tv(ctx, &tv) : 0;
+    has_timer = serv ? ghl_fill_tv(serv, &tv) : 0;
     
     if (has_timer) {
       r = select(MAX(r,tunmax)+1, fds, wfds, NULL, &tv);
@@ -1427,20 +1427,20 @@ void process_output(fd_set *fds, fd_set *wfds) {
       }
   }
 
-  handle_connections(ctx, fds, wfds);
+  handle_connections(serv, fds, wfds);
 
 
   if (FD_ISSET(tun_fd, fds)) {
-      ghl_rh_t *rh = ctx ? ctx->room : NULL;
-      handle_tunnel(ctx, rh);
+      ghl_room_t *rh = serv ? serv->room : NULL;
+      handle_tunnel(serv, rh);
   }
   if (FD_ISSET(fwdtun_fd, fds)) {
-      ghl_rh_t *rh = ctx ? ctx->room : NULL;
+      ghl_room_t *rh = serv ? serv->room : NULL;
       handle_fwd_tunnel(rh);
   }
     
-  if (ctx) {
-      ghl_process(ctx, fds);
+  if (serv) {
+      ghl_process(serv, fds);
   }
 
 }
@@ -1457,9 +1457,9 @@ void client_loop() {
   FD_SET(0, &i_fds);
 
   while(!quit) {
-  if (need_free_ctx) {
-      ctx = NULL;
-      need_free_ctx = 0;
+  if (need_free_serv) {
+      serv = NULL;
+      need_free_serv = 0;
     }
     fds = i_fds;
     wfds = i_wfds;
@@ -1526,7 +1526,7 @@ int main(int argc, char **argv) {
   
   llist_free_val(socklist);  
   hash_free(ch2sock);
-  ghl_free_ctx(ctx);  
+  ghl_free_serv(serv);  
   garena_fini();
   endwin();
   printf("bye...\n");

@@ -11,6 +11,7 @@
 #include <garena/gsp.h>
 #include <garena/gp2pp.h>
 #include <garena/ghl.h>
+#include <garena/private.h>
 
 FILE *deb;
 
