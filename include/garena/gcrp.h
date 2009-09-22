@@ -13,7 +13,7 @@
 #define GCRP_PORT 8687
 
 
-#define GCRP_MAX_MSGSIZE 8192
+#define GCRP_MAX_MSGSIZE 16384
 
 #define GCRP_MSG_JOIN 0x22
 #define GCRP_MSG_PART 0x23

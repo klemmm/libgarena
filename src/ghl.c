@@ -672,7 +672,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
     r = gcrp_read(serv->room->roomsock, buf, GCRP_MAX_MSGSIZE);
     if (r != -1) {
       gcrp_input(serv->gcrp_htab, buf, r, serv->room);
-    } else {
+    } else if ((errno != EINTR) && (errno != EAGAIN)) {
       if (serv->room->joined) {
         room_disc_ev.rh = serv->room;
         signal_event(serv, GHL_EV_ROOM_DISC, &room_disc_ev);
