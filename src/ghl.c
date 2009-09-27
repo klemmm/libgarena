@@ -1011,6 +1011,7 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
   insert_pkt(ch->sendq, pkt);
   if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) {
     xmit_packet(serv, pkt);
+    pkt->first_trans = perftest_now();
 /*    fprintf(deb, "[GHL] Initial packet transmit: seq=%u\n", pkt->seq); */
   }
   return 0;
@@ -1597,6 +1598,8 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
   ghl_room_t *rh = serv->room;
   ghl_ch_t *ch;
   cell_t iter;
+  int now = perftest_now();
+  
   ghl_ch_pkt_t *pkt;
   ghl_ch_pkt_t *todel = NULL;
   
@@ -1631,6 +1634,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     pkt = llist_val(iter);
     if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
       todel = pkt;
+      fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
     }
     if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
      

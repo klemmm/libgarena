@@ -334,6 +334,7 @@ typedef struct {
   int did_fast_retrans;
   int xmit_ts;
   unsigned int partial;
+  int first_trans;
   char *payload;
 } ghl_ch_pkt_t;
 
