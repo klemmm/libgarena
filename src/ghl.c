@@ -172,7 +172,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
     goto err;
   }
   local.sin_family = AF_INET;
-  local.sin_port = htons(GP2PP_PORT); 
+  local.sin_port = htons(serv->gp2pp_port); 
   local.sin_addr.s_addr = INADDR_ANY;
   
   if (bind(serv->peersock, (struct sockaddr *) &local, sizeof(local)) == -1) {
@@ -181,7 +181,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
   }
 
   fsocket.sin_family = AF_INET;
-  fsocket.sin_port = htons(serv->gp2pp_port);
+  fsocket.sin_port = htons(GP2PP_PORT);
   fsocket.sin_addr.s_addr = server_ip;
   if (connect(serv->peersock, (struct sockaddr *) &fsocket, sizeof(fsocket)) == -1) {
     garena_errno = GARENA_ERR_LIBC;
@@ -202,7 +202,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
   }
   
   local.sin_family = AF_INET;
-  local.sin_port = htons(GP2PP_PORT); 
+  local.sin_port = htons(serv->gp2pp_port); 
   local.sin_addr.s_addr = INADDR_ANY;
   
   if (bind(serv->peersock, (struct sockaddr *) &local, sizeof(local)) == -1) {
@@ -221,7 +221,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
     goto err;
   if (gsp_send_hello(serv->servsock, serv->session_key, serv->session_iv) == -1)
     goto err;
-  if (gp2pp_do_ip_lookup(serv->peersock, serv->server_ip, serv->gp2pp_port) == -1)
+  if (gp2pp_do_ip_lookup(serv->peersock, serv->server_ip, GP2PP_PORT) == -1)
     goto err;
 
   mh = mhash_init(MHASH_MD5);
@@ -696,7 +696,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
       gp2pp_input(serv->gp2pp_htab, buf, r, &remote);
     } 
   }
-  if (FD_ISSET(serv->servsock, fds)) {
+  if ((serv->servsock != -1) && FD_ISSET(serv->servsock, fds)) {
     r = gsp_read(serv->servsock, buf, GSP_MAX_MSGSIZE);
     if (r != -1) {
       gsp_input(serv->gsp_htab, buf, r, serv->session_key, serv->session_iv);
@@ -1421,7 +1421,7 @@ static int do_hello(void *privdata) {
 static int do_roominfo_query(void *privdata) {
   ghl_serv_t *serv = privdata;
   
-  if (serv && serv->connected && gp2pp_request_roominfo(serv->peersock, serv->my_info.user_id, serv->server_ip, serv->gp2pp_port) == -1) {
+  if (serv && serv->connected && gp2pp_request_roominfo(serv->peersock, serv->my_info.user_id, serv->server_ip, GP2PP_PORT) == -1) {
     fprintf(deb, "[WARN/GHL] Room Info will not be available because the request failed.\n");
     fflush(deb); 
   }
@@ -1441,7 +1441,7 @@ static int handle_auth(int type, void *payload, unsigned int length, void *privd
       fprintf(deb, "[GHL] My user_id is %x\n", serv->my_info.user_id);
       fflush(deb);
       serv->auth_ok = 1;
-      if (gp2pp_request_roominfo(serv->peersock, serv->my_info.user_id, serv->server_ip, serv->gp2pp_port) == -1) {
+      if (gp2pp_request_roominfo(serv->peersock, serv->my_info.user_id, serv->server_ip, GP2PP_PORT) == -1) {
         fprintf(deb, "[WARN/GHL] Room Info will not be available because the request failed.\n");
         fflush(deb); 
       }

@@ -21,7 +21,7 @@
 int garena_init(void);
 void garena_fini(void);
 
-#define DEBUG_LOG "/tmp/garena.log"
+#define DEBUG_LOG "garena.log"
 extern FILE *deb;
 
 

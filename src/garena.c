@@ -58,6 +58,7 @@ void garena_fini() {
  * @return 0 if success, -1 if the library initialization failed.
  */
 int garena_init() {
+  char filename[256];
   if (gsp_init() == -1) {
     return -1;
   }
@@ -70,7 +71,8 @@ int garena_init() {
   if (ghl_init() == -1) {
     return -1;
   }
-  deb = fopen(DEBUG_LOG, "w");
+  snprintf(filename, sizeof(filename), "%s/%s", getenv("HOME"), DEBUG_LOG);
+  deb = fopen(filename, "w");
   if (deb == NULL) {
     garena_errno = GARENA_ERR_LIBC;
     return -1;
