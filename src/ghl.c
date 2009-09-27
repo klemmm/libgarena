@@ -1447,6 +1447,13 @@ static int handle_auth(int type, void *payload, unsigned int length, void *privd
       }
       break;
     case GSP_MSG_AUTH_FAIL:
+      if (serv->connected) {
+        fprintf(deb, "[WARN/GHL] Received main server AUTH FAIL but we are already connected. Closing connection to main server, but trying to maintain normal operation.\n");
+        fflush(deb);
+        close(serv->servsock);
+        serv->servsock = -1;
+        return -1;
+      }
       ghl_free_timer(serv->servconn_timeout);
       serv->servconn_timeout = NULL;
       servconn.result = GHL_EV_RES_FAILURE;
