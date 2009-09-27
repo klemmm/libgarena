@@ -1106,6 +1106,7 @@ static void member_extract(ghl_member_t *dst, gcrp_member_t *src) {
 static int ghl_free_room(ghl_room_t *rh) {
   ihashitem_t iter;
   ghl_ch_t *ch;
+  ghl_conn_fin_t conn_fin_ev;
   close(rh->roomsock);
   
   for (iter = ihash_iter(rh->members); iter; iter = ihash_next(rh->members, iter)) {
@@ -1114,6 +1115,12 @@ static int ghl_free_room(ghl_room_t *rh) {
 
   for (iter = ihash_iter(rh->conns); iter; iter = ihash_next(rh->conns, iter)) {
     ch = ihash_val(iter);
+    if (ch->cstate != GHL_CSTATE_CLOSING_OUT) {
+      conn_fin_ev.ch = ch;
+      ch->cstate = GHL_CSTATE_CLOSING_OUT;
+      signal_event(rh->serv, GHL_EV_CONN_FIN, &conn_fin_ev);
+    }
+
     conn_free(ch);
     
   }
