@@ -1607,7 +1607,8 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-/*  fprintf(deb, "[%x] ACK, this_ack=%u next_expected=%u\n", conn_id, seq1, seq2); */
+  fprintf(deb, "[%x] ACK, this_ack=%u next_expected=%u\n", conn_id, seq1, seq2); 
+  fflush(deb);
   ch = ghl_conn_from_id(rh, conn_id);
   if (ch == NULL) {
     fprintf(deb, "Alien conn: %x\n", conn_id);
@@ -1719,10 +1720,10 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
     insert_pkt(ch->recvq, pkt);
     update_next(serv, ch); 
     try_deliver(serv, ch);
+    remote->sin_port = htons(ch->member->external_port);
+    gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
   }
   
-  remote->sin_port = htons(ch->member->external_port);
-  gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
   
   return 0;
 }
