@@ -34,7 +34,7 @@ static llist_t timers;
 
 /* static (private) functions declarations */
 static int ghl_free_room(ghl_room_t *rh);
-static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt);
+static int insert_pkt(llist_t list, ghl_ch_pkt_t *pkt);
 static void conn_free(ghl_ch_t *ch);
 static void xmit_packet(ghl_serv_t *serv, ghl_ch_pkt_t *pkt);
 static void myinfo_pack(gsp_myinfo_t *dst, ghl_myinfo_t *src);
@@ -1283,14 +1283,14 @@ static void send_hello_to_members(ghl_room_t *rh) {
   
 }
 
-static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt) {
+static int insert_pkt(llist_t list, ghl_ch_pkt_t *pkt) {
   ghl_ch_pkt_t *cur;
   cell_t iter;
   
   for (iter = llist_iter(list); iter; iter = llist_next(iter)) {
     cur = llist_val(iter);
     if (cur->seq == pkt->seq)
-      return; /* we already have this packet */
+      return 0; /* we already have this packet */
     if ((cur->seq - pkt->seq) >= 0)
       break;
   }
@@ -1299,6 +1299,7 @@ static void insert_pkt(llist_t list, ghl_ch_pkt_t *pkt) {
   } else {
     llist_add_tail(list, pkt);
   }
+  return 1;
 }
 
 static void conn_free(ghl_ch_t *ch) {
@@ -1717,11 +1718,12 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
-    insert_pkt(ch->recvq, pkt);
+    if (insert_pkt(ch->recvq, pkt)) {
+      remote->sin_port = htons(ch->member->external_port);
+      gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
+    }
     update_next(serv, ch); 
     try_deliver(serv, ch);
-    remote->sin_port = htons(ch->member->external_port);
-    gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
   }
   
   
