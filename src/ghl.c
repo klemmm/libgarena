@@ -1718,10 +1718,9 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
-    if (insert_pkt(ch->recvq, pkt)) {
-      remote->sin_port = htons(ch->member->external_port);
-      gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
-    }
+    insert_pkt(ch->recvq, pkt);
+    remote->sin_port = htons(ch->member->external_port);
+    gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
     update_next(serv, ch); 
     try_deliver(serv, ch);
   }
