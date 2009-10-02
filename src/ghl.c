@@ -24,6 +24,7 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <mhash.h>
+#include <errno.h>
 
 /* documentation */
 
