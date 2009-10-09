@@ -9,18 +9,22 @@
 #include <garena/garena.h>
 
 
+#define GP2PP_ALPHA 820
+#define GP2PP_BETA 1536
+#define GP2PP_LBOUND 100
+#define GP2PP_UBOUND 3000
+#define GP2PP_INIT_RTO 200
+
 #define GP2PP_PORT 1513
-#define GP2PP_MAX_SENDQ 16384
-#define GP2PP_MAX_IN_TRANSIT 64
+#define GP2PP_MAX_SENDQ 65536
+#define GP2PP_MAX_IN_TRANSIT 65536
 #define GP2PP_MAX_UNDELIVERED 16384
 
 #define GP2PP_MAGIC_LOCALIP (inet_addr("127.0.0.1"))
 
-#define GP2PP_HELLO_INTERVAL 30
-#define GP2PP_CONN_TS_DIVISOR 256
-#define GP2PP_CONN_RETRANS_DELAY 10
-#define GP2PP_CONN_RETRANS_CHECK 1
-#define GP2PP_CONN_TIMEOUT 30
+#define GP2PP_HELLO_INTERVAL 3000
+#define GP2PP_CONN_RETRANS_CHECK 50
+#define GP2PP_CONN_TIMEOUT 3000
 
 #define GP2PP_MAX_MSGSIZE 8192
 
@@ -144,7 +148,6 @@ int gp2pp_send_hello_request(int sock, int from_ID, struct sockaddr_in *remote);
 int gp2pp_send_udp_encap(int sock, int from_ID, int sport, int dport, char *payload, unsigned int length, struct sockaddr_in *remote);
 int gp2pp_request_roominfo(int sock, int my_id, int server_ip, int server_port);
 
-int gp2pp_get_tsnow();
 int gp2pp_do_ip_lookup(int sock, int server_ip, int server_port);
 int gp2pp_register_handler(gp2pp_handtab_t *tab,int msgtype, gp2pp_fun_t *fun, void *privdata);
 int gp2pp_unregister_handler(gp2pp_handtab_t *tab,int msgtype);

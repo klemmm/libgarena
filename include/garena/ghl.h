@@ -10,6 +10,7 @@
 #ifndef GARENA_GHL_H
 #define GARENA_GHL_H 1
 #include <stdint.h>
+#include <garena/garena.h>
 #include <garena/gcrp.h>
 #include <garena/gp2pp.h>
 #include <garena/gsp.h>
@@ -20,7 +21,7 @@
 /**
  * Default time (in seconds) to wait before join room timeout.
  */ 
-#define GHL_JOIN_TIMEOUT 6
+#define GHL_JOIN_TIMEOUT 600
 
 
 /**
@@ -112,7 +113,7 @@
 /** 
  * The interval (seconds) between query for room member count
  */
-#define GHL_ROOMINFO_QUERY_INTERVAL 30
+#define GHL_ROOMINFO_QUERY_INTERVAL 300
 
 /**
  * The type for timer handler functions
@@ -317,6 +318,8 @@ typedef struct ghl_ch_s {
 #define GHL_CSTATE_CLOSING_OUT 4
   int cstate;
   int ts_ack;
+  gtime_t rto;
+  gtime_t srtt;
   ghl_serv_t *serv; /**< Server handle */
   ghl_member_t *member; /**< The peer */
   int finseq; 
@@ -332,9 +335,11 @@ typedef struct {
   unsigned int length;
   int seq;
   int did_fast_retrans;
-  int xmit_ts;
+  gtime_t xmit_ts;
+  gtime_t rto;
+  int retrans;
   unsigned int partial;
-  int first_trans;
+  gtime_t first_trans;
   char *payload;
 } ghl_ch_pkt_t;
 

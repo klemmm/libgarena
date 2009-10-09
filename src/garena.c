@@ -27,7 +27,9 @@
  * This file contains various generic, non protocol-related, functions for garena.
  *
  */
-  
+
+#include <sys/time.h>
+#include <time.h>  
 #include <stdio.h>
 #include <signal.h>
 #include <garena/config.h>
@@ -52,6 +54,20 @@ void garena_fini() {
     fclose(deb);
 }
 
+static struct timeval tv_init;
+
+/**
+ * Returns the 1/100th of seconds elapsed since call to garena_init()
+ *
+ * @return time value
+ */
+ 
+gtime_t garena_now() {
+  struct timeval tv_now;
+  gettimeofday(&tv_now, NULL);
+  return ((tv_now.tv_sec - tv_init.tv_sec)*100 + ((tv_now.tv_usec - tv_init.tv_usec)/10000));
+}
+
 /**
  * Call this function to initialize the garena library.
  *
@@ -59,6 +75,7 @@ void garena_fini() {
  */
 int garena_init() {
   char filename[256];
+  gettimeofday(&tv_init, NULL);
   if (gsp_init() == -1) {
     return -1;
   }

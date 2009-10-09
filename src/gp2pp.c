@@ -100,10 +100,10 @@ static int gp2pp_handle_conn_pkt(gp2pp_handtab_t *htab, char *buf, unsigned int 
 int gp2pp_input(gp2pp_handtab_t *htab, char *buf, unsigned int length, struct sockaddr_in *remote) {
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
 
-/*  if ((random() & 0x1F) == 0) {
+  if ((random() & 0x1F) == 0) {
     return 0;
   }
-*/
+
   /*
    * Need special handling for type 0x06 and 0x3F packet (ip lookup and room info)
    * since they don't have any header (omgwtf!!!1!one!1!lim{x->0}(sinx/x))
@@ -162,11 +162,11 @@ int gp2pp_output(int sock, int type, char *payload, unsigned int length, int use
   char buf[GP2PP_MAX_MSGSIZE];
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
   int hdrsize = sizeof(gp2pp_hdr_t);
-/*    
+
   if ((random() & 0x1F) == 0) {
     return 0;
   }
-  */
+
   if (length + hdrsize > GP2PP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
@@ -432,21 +432,3 @@ int gp2pp_new_conn_id(void) {
   return result;
 }
 
-int gp2pp_get_tsnow() {
-  struct timeval tv;
-  if (gettimeofday(&tv, NULL) == -1) {
-    garena_errno = GARENA_ERR_LIBC;
-    return -1;
-  }
-  return (tv.tv_usec/GP2PP_CONN_TS_DIVISOR);
-}
-
-int perftest_now() {
-  struct timeval tv;
-  if (gettimeofday(&tv, NULL) == -1) {
-    garena_errno = GARENA_ERR_LIBC;
-    return -1;
-  }
-  return ((tv.tv_usec/1000) + (tv.tv_sec*1000));
-
-}

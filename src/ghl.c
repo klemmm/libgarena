@@ -1,3 +1,4 @@
+
 /**
  * @file
  *
@@ -299,13 +300,13 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
     goto err;
 
   /* timers handlers */
-  if ((serv->hello_timer = ghl_new_timer(time(NULL) + GP2PP_HELLO_INTERVAL, do_hello, serv)) == NULL)
+  if ((serv->hello_timer = ghl_new_timer(garena_now() + GP2PP_HELLO_INTERVAL, do_hello, serv)) == NULL)
     goto err;
-  if ((serv->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, serv)) == NULL)
+  if ((serv->conn_retrans_timer = ghl_new_timer(garena_now() + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, serv)) == NULL)
     goto err;
-  if ((serv->roominfo_timer = ghl_new_timer(time(NULL) + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, serv)) == NULL)
+  if ((serv->roominfo_timer = ghl_new_timer(garena_now() + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, serv)) == NULL)
     goto err;
-  if ((serv->servconn_timeout = ghl_new_timer(time(NULL) + GHL_SERVCONN_TIMEOUT, handle_servconn_timeout, serv)) == NULL)
+  if ((serv->servconn_timeout = ghl_new_timer(garena_now() + GHL_SERVCONN_TIMEOUT, handle_servconn_timeout, serv)) == NULL)
     goto err;
     
   return serv;
@@ -425,7 +426,7 @@ ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned
   rh->got_members = 0;
   serv->room = rh;
   fflush(deb);
-  rh->timeout = ghl_new_timer(time(NULL) + GHL_JOIN_TIMEOUT, handle_room_join_timeout, rh);
+  rh->timeout = ghl_new_timer(garena_now() + GHL_JOIN_TIMEOUT, handle_room_join_timeout, rh);
   return(rh);
 }
 
@@ -589,7 +590,7 @@ int ghl_fill_fds(ghl_serv_t *serv, fd_set *fds) {
  
 int ghl_fill_tv(ghl_serv_t *serv, struct timeval *tv) {
   ghl_timer_t *next;
-  int now = time(NULL);
+  int now = garena_now();
   tv->tv_sec = 0;
   tv->tv_usec = 0;
   next = llist_head(timers);
@@ -623,7 +624,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
   cell_t iter;
   struct timeval tv;
   int stuff_to_do; 
-  int now = time(NULL);
+  int now = garena_now();
   ghl_timer_t *cur;
   ghl_room_disc_t room_disc_ev;
   ghl_me_join_t join;  
@@ -918,15 +919,17 @@ ghl_ch_t *ghl_conn_connect(ghl_serv_t *serv, ghl_member_t *member, int port) {
   
   ch->cstate = GHL_CSTATE_ESTABLISHED;
   ch->member = member;
-  ch->ts_base = gp2pp_get_tsnow();
+  ch->ts_base = garena_now();
   ch->sendq = llist_alloc();
   ch->recvq = llist_alloc();
   ch->serv = serv;
   ch->snd_una = 0;
   ch->snd_next = 0;
   ch->rcv_next = 0;
+  ch->rto = GP2PP_INIT_RTO;
+  ch->srtt = 0;
   ch->rcv_next_deliver = 0;
-  ch->ts_ack = time(NULL);
+  ch->ts_ack = garena_now();
   ch->conn_id = gp2pp_new_conn_id();
   ihash_put(rh->conns, ch->conn_id, ch);
   
@@ -982,7 +985,7 @@ void ghl_conn_close(ghl_serv_t *serv, ghl_ch_t *ch) {
  */
 int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int length) {
   ghl_ch_pkt_t *pkt;
-  int now = gp2pp_get_tsnow();
+  int now = garena_now();
   if (ch->cstate == GHL_CSTATE_CLOSING_OUT) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
@@ -997,23 +1000,27 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
   pkt->length = length;
   pkt->payload = malloc(length);
   pkt->seq = ch->snd_next;
-  pkt->ts_rel = (now - ch->ts_base);
+  pkt->ts_rel = (now - ch->ts_base)*40;
   pkt->ch = ch;
   pkt->xmit_ts = 0;
   pkt->partial = 0;
+  pkt->retrans = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   
   ch->snd_next++;
   ch->ts_base = now;
   if (!llist_is_empty(ch->sendq)) {
-    ch->ts_ack = time(NULL);
+    ch->ts_ack = garena_now();
   }
   insert_pkt(ch->sendq, pkt);
   if ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT) {
+    /* initial transmit */
+    pkt->rto = ch->rto;
+    pkt->xmit_ts = garena_now();
     xmit_packet(serv, pkt);
-    pkt->first_trans = perftest_now();
-/*    fprintf(deb, "[GHL] Initial packet transmit: seq=%u\n", pkt->seq); */
+    pkt->first_trans = garena_now();
+    fprintf(deb, "[GHL] Initial packet transmit: seq=%x snd_una=%x\n", pkt->seq, ch->snd_una); 
   }
   return 0;
 }
@@ -1040,7 +1047,6 @@ static void xmit_packet(ghl_serv_t *serv, ghl_ch_pkt_t *pkt) {
   remote.sin_family = AF_INET;
   remote.sin_addr = pkt->ch->member->effective_ip;
   remote.sin_port = htons(pkt->ch->member->effective_port);
-  pkt->xmit_ts = time(NULL);
   gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_DATA, pkt->payload, pkt->length, serv->my_info.user_id, pkt->ch->conn_id, pkt->seq, pkt->ch->rcv_next, pkt->ts_rel, &remote);
 }
 
@@ -1328,8 +1334,11 @@ static void do_fast_retrans(ghl_serv_t *serv, llist_t sendq, int up_to) {
     if ((pkt->seq - up_to) >= 0)
       break;
     if (pkt->did_fast_retrans == 0) {
+      /* fast retransmit */
+      pkt->retrans = 1;
+      pkt->xmit_ts = garena_now();
       xmit_packet(serv, pkt);
-/*        fprintf(deb, "[GHL] Fast-retransmitting packet, seq=%u\n", pkt->seq); */
+        fprintf(deb, "[GHL] Fast-retransmitting packet, seq=%x\n", pkt->seq); 
       
       pkt->did_fast_retrans = 1;
     }
@@ -1358,11 +1367,11 @@ static int do_conn_retrans(void *privdata) {
   ghl_ch_pkt_t *pkt;
   ghl_ch_t *todel = NULL;
   ghl_room_t *rh = serv->room;
-  int now = time(NULL);
+  int now = garena_now();
   int retrans;
   
   if (serv->room == NULL) {
-    serv->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
+    serv->conn_retrans_timer = ghl_new_timer(garena_now() + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
     return 0;
   }
   for (iter = ihash_iter(rh->conns); iter; iter = ihash_next(rh->conns, iter)) {
@@ -1376,12 +1385,17 @@ static int do_conn_retrans(void *privdata) {
     for (iter2 = llist_iter(ch->sendq); iter2; iter2 = llist_next(iter2)) {
       pkt = llist_val(iter2);
       if ((pkt->seq - ch->snd_una) > GP2PP_MAX_IN_TRANSIT) {
-/*        fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id); */
+        fprintf(deb, "[Flow control] Congestion on connection %x\n", ch->conn_id);
         fflush(deb);
         break;
       }
-      if ((pkt->xmit_ts + GP2PP_CONN_RETRANS_DELAY) <= now) {
-/*        fprintf(deb, "[GHL] Retransmitting packet, seq=%u\n", pkt->seq); */
+      if ((pkt->xmit_ts + pkt->rto) <= now) {
+        fprintf(deb, "[GHL] Retransmitting packet, seq=%x after RTO of %u\n", pkt->seq, pkt->rto); 
+        pkt->rto <<= 1; /* exponential backoff */
+        if (ch->rto < pkt->rto)
+          ch->rto = pkt->rto;
+        pkt->xmit_ts = garena_now();
+        pkt->retrans = 1;
         xmit_packet(serv, pkt);
         pkt->did_fast_retrans = 0;
         retrans++;
@@ -1409,7 +1423,7 @@ static int do_conn_retrans(void *privdata) {
     todel = NULL;
   }
 
-  serv->conn_retrans_timer = ghl_new_timer(time(NULL) + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
+  serv->conn_retrans_timer = ghl_new_timer(garena_now() + GP2PP_CONN_RETRANS_CHECK, do_conn_retrans, privdata);
   return 0;
 }
 
@@ -1417,7 +1431,7 @@ static int do_conn_retrans(void *privdata) {
 static int do_hello(void *privdata) {
   ghl_serv_t *serv = privdata;
   send_hello_to_all(serv);  
-  serv->hello_timer = ghl_new_timer(time(NULL) + GP2PP_HELLO_INTERVAL, do_hello, privdata);
+  serv->hello_timer = ghl_new_timer(garena_now() + GP2PP_HELLO_INTERVAL, do_hello, privdata);
   return 0;
 }
 
@@ -1429,7 +1443,7 @@ static int do_roominfo_query(void *privdata) {
     fflush(deb); 
   }
 
-  serv->roominfo_timer = ghl_new_timer(time(NULL) + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, privdata);
+  serv->roominfo_timer = ghl_new_timer(garena_now() + GHL_ROOMINFO_QUERY_INTERVAL, do_roominfo_query, privdata);
   return 0;
 }
 
@@ -1538,15 +1552,17 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
     garena_errno = GARENA_ERR_PROTOCOL;
     return -1;
   }
-  conn_incoming_ev.ch->ts_base = gp2pp_get_tsnow();
+  conn_incoming_ev.ch->ts_base = garena_now();
   conn_incoming_ev.ch->sendq = llist_alloc();
   conn_incoming_ev.ch->recvq = llist_alloc();
   conn_incoming_ev.ch->snd_una = 0;
   conn_incoming_ev.ch->serv = serv;
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
+  conn_incoming_ev.ch->srtt = 0;
+  conn_incoming_ev.ch->rto = GP2PP_INIT_RTO;
   conn_incoming_ev.ch->rcv_next_deliver = 0;
-  conn_incoming_ev.ch->ts_ack = time(NULL);
+  conn_incoming_ev.ch->ts_ack = garena_now();
   conn_incoming_ev.ch->cstate = GHL_CSTATE_ESTABLISHED;
   conn_incoming_ev.ch->conn_id = ghtonl(initconn->conn_id);
   conn_incoming_ev.dport = ghtons(initconn->dport);
@@ -1584,6 +1600,7 @@ static int handle_conn_fin_msg(int subtype, void *payload, unsigned int length, 
   pkt->did_fast_retrans = 0;
   pkt->xmit_ts = 0;
   pkt->partial = 0;
+  pkt->retrans = 0;
   pkt->payload = NULL;
   pkt->seq = ch->rcv_next; /* wtf is this crappy protocol, the FIN packet does not have a sequence number */
   pkt->ts_rel = ts_rel;
@@ -1600,7 +1617,8 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
   ghl_room_t *rh = serv->room;
   ghl_ch_t *ch;
   cell_t iter;
-  int now = perftest_now();
+  int now = garena_now();
+  gtime_t rtt;
   
   ghl_ch_pkt_t *pkt;
   ghl_ch_pkt_t *todel = NULL;
@@ -1620,7 +1638,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
   }
   if ((seq2 - ch->snd_una) > 0) {
     ch->snd_una = seq2;
-    ch->ts_ack = time(NULL);
+    ch->ts_ack = garena_now();
   } else {
     if ((seq2 - ch->snd_una) < 0)
       fprintf(deb, "Duplicate ack %u on connex %x\n", seq2, conn_id);
@@ -1638,9 +1656,25 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
       todel = pkt;
       fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
+      if (pkt->retrans == 0) {
+        rtt = now - pkt->first_trans;
+        if (ch->srtt == 0) {
+          ch->srtt = rtt;
+        } else {
+          ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
+          ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
+          if (ch->rto > GP2PP_UBOUND)
+            ch->rto = GP2PP_UBOUND;
+          if (ch->rto < GP2PP_LBOUND)
+            ch->rto = GP2PP_LBOUND;
+        }
+      }
     }
     if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
      
+     /* initial transmit (after flow control) */
+      pkt->rto = ch->rto;
+      pkt->xmit_ts = garena_now();
       xmit_packet(serv, pkt);
   }
   if (todel != NULL) {
@@ -1716,6 +1750,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   pkt->ch = ch;
   pkt->xmit_ts = 0;
   pkt->partial = 0;
+  pkt->retrans = 0;
   pkt->did_fast_retrans = 0;
   memcpy(pkt->payload, payload, length);
   if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {

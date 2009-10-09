@@ -15,6 +15,7 @@
 #define ghtonl(x) (x)
 #endif
 
+typedef uint32_t gtime_t;
 
 #define GARENA_NETWORK "192.168.29.0"
 #define FWD_NETWORK "192.168.28.0"
