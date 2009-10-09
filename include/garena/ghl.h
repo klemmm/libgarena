@@ -99,7 +99,7 @@
 /**
  * The number of seconds to wait for main server connection
  */
-#define GHL_SERVCONN_TIMEOUT 6
+#define GHL_SERVCONN_TIMEOUT 600
 
 /**
  * Failure
