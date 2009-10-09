@@ -1389,7 +1389,7 @@ static int do_conn_retrans(void *privdata) {
         fflush(deb);
         break;
       }
-      if ((pkt->xmit_ts + pkt->rto) <= now) {
+      if ((pkt->xmit_ts != 0) && ((pkt->xmit_ts + pkt->rto) <= now)) {
         fprintf(deb, "[GHL] Retransmitting packet, seq=%x after RTO of %u\n", pkt->seq, pkt->rto); 
         pkt->rto <<= 1; /* exponential backoff */
         if (ch->rto < pkt->rto)
@@ -1656,6 +1656,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
     if ((pkt->seq == seq1) || ((ch->snd_una - pkt->seq) >= 1)) {
       todel = pkt;
       fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
+      fflush(deb);
       if (pkt->retrans == 0) {
         rtt = now - pkt->first_trans;
         if (ch->srtt == 0) {
@@ -1693,6 +1694,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   ghl_room_t *rh = serv->room;
   ghl_ch_pkt_t *pkt;
   cell_t iter;
+  gtime_t now = garena_now();
   ghl_ch_pkt_t *todel = NULL;
   if (rh == NULL) {
     garena_errno = GARENA_ERR_PROTOCOL;
@@ -1727,6 +1729,9 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
     pkt = llist_val(iter);
     if ((ch->snd_una - pkt->seq) >= 1) {
       todel = pkt;
+      fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
+      fflush(deb);
+
     }
   }
   if (todel != NULL) {
@@ -1756,8 +1761,8 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   if (((seq1 - ch->rcv_next) >= 0) && ((ch->rcv_next - ch->rcv_next_deliver) < GP2PP_MAX_UNDELIVERED) && ((seq1 - ch->rcv_next) < GP2PP_MAX_IN_TRANSIT)) {
     insert_pkt(ch->recvq, pkt);
     remote->sin_port = htons(ch->member->external_port);
-    gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
     update_next(serv, ch); 
+    gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_ACK, NULL, 0, serv->my_info.user_id, conn_id, seq1, ch->rcv_next, 0, remote);
     try_deliver(serv, ch);
   }
   
