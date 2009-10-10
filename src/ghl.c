@@ -1415,7 +1415,6 @@ static int do_conn_retrans(void *privdata) {
         pkt->xmit_ts = garena_now();
         pkt->retrans = 1;
         xmit_packet(serv, pkt);
-        pkt->did_fast_retrans = 0;
         retrans++;
       }
     }
