@@ -999,7 +999,7 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
     return -1;
   }
   
-  if ((ch->last_xmit + ch->rto) > now) {
+  if ((ch->last_xmit + ch->rto) < now) {
     fprintf(deb, "[CC] Restart after idle...\n");
     fprintf(deb, "[CC] Mode: SLOW START\n");
   }
@@ -1685,13 +1685,14 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
         update_rto(rtt, ch);
       }
     }
-    if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
+    if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) {
      
      /* initial transmit (after flow control) */
       pkt->rto = ch->rto;
       pkt->xmit_ts = garena_now();
       xmit_packet(serv, pkt);
       ch->flightsize += pkt->length;
+    }
   }
   if (todel != NULL) {
       llist_del_item(ch->sendq, todel);
