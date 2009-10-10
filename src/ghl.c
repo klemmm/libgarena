@@ -1659,16 +1659,18 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
       fflush(deb);
       if (pkt->retrans == 0) {
         rtt = now - pkt->first_trans;
+        if (rtt == 0)
+          rtt++;
         if (ch->srtt == 0) {
           ch->srtt = rtt;
         } else {
           ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
-          ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
-          if (ch->rto > GP2PP_UBOUND)
-            ch->rto = GP2PP_UBOUND;
-          if (ch->rto < GP2PP_LBOUND)
-            ch->rto = GP2PP_LBOUND;
         }
+        ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
+        if (ch->rto > GP2PP_UBOUND)
+          ch->rto = GP2PP_UBOUND;
+        if (ch->rto < GP2PP_LBOUND)
+          ch->rto = GP2PP_LBOUND;
       }
     }
     if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
@@ -1694,6 +1696,7 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
   ghl_room_t *rh = serv->room;
   ghl_ch_pkt_t *pkt;
   cell_t iter;
+  gtime_t rtt;
   gtime_t now = garena_now();
   ghl_ch_pkt_t *todel = NULL;
   if (rh == NULL) {
@@ -1731,6 +1734,22 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
       todel = pkt;
       fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
       fflush(deb);
+      if (pkt->retrans == 0) {
+        rtt = now - pkt->first_trans;
+        if (rtt == 0)
+          rtt++;
+        if (ch->srtt == 0) {
+          ch->srtt = rtt;
+        } else {
+          ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
+        }
+        ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
+        if (ch->rto > GP2PP_UBOUND)
+          ch->rto = GP2PP_UBOUND;
+        if (ch->rto < GP2PP_LBOUND)
+          ch->rto = GP2PP_LBOUND;
+      }
+
 
     }
   }

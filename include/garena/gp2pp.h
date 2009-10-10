@@ -11,7 +11,7 @@
 
 #define GP2PP_ALPHA 820
 #define GP2PP_BETA 1536
-#define GP2PP_LBOUND 100
+#define GP2PP_LBOUND 50
 #define GP2PP_UBOUND 3000
 #define GP2PP_INIT_RTO 200
 

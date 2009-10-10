@@ -100,7 +100,7 @@ static int gp2pp_handle_conn_pkt(gp2pp_handtab_t *htab, char *buf, unsigned int 
 int gp2pp_input(gp2pp_handtab_t *htab, char *buf, unsigned int length, struct sockaddr_in *remote) {
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
 
-  if ((random() & 0x1F) == 0) {
+  if ((random() & 0xF) == 0) {
     return 0;
   }
 
@@ -163,7 +163,7 @@ int gp2pp_output(int sock, int type, char *payload, unsigned int length, int use
   gp2pp_hdr_t *hdr = (gp2pp_hdr_t *) buf;
   int hdrsize = sizeof(gp2pp_hdr_t);
 
-  if ((random() & 0x1F) == 0) {
+  if ((random() & 0xF) == 0) {
     return 0;
   }
 
@@ -189,7 +189,10 @@ int gp2pp_output_conn(int sock, int subtype, char *payload, unsigned int length,
   int type = GP2PP_MSG_CONN_PKT;
   gp2pp_conn_hdr_t *conn_hdr = (gp2pp_conn_hdr_t *) buf;
   int hdrsize = sizeof(gp2pp_conn_hdr_t);
-    
+  if ((random() & 0xF) == 0) {
+    return 0;
+  }
+
   if (length + hdrsize > GP2PP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
