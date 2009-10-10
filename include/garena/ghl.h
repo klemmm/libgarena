@@ -186,7 +186,8 @@ typedef struct {
 typedef struct ghl_serv_s {
   int servsock; /**< Socket to talk to main server (GSP, tcp port 7456) */
   int peersock; /**< Socket to talk to other clients (GP2PP, udp port 1513) */
-  int gp2pp_port; /**< GP2PP port, usually 1513 but configurable */ 
+  int gp2pp_rport; /**< GP2PP remote port, usually 1513 but configurable */ 
+  int gp2pp_lport; /**< GP2PP local port, usually 1513 but configurable */ 
   int server_ip; /**< Main server IP */
   unsigned char session_key[GSP_KEYSIZE]; /**< AES KEY for GSP session with main server */
   unsigned char session_iv[GSP_IVSIZE]; /**< AES IV for GSP session with main server */
@@ -206,6 +207,7 @@ typedef struct ghl_serv_s {
   ghl_timer_t *roominfo_timer; /**< Timer to send queries for room usage count */
   ghl_timer_t *servconn_timeout; /**< Timer to handle server connection timeout */
   ihash_t roominfo; /**< Hashtable (key=room id, value=pointer to integer) to know the room usage count */
+  int mtu;
 } ghl_serv_t;
 
 
@@ -320,6 +322,10 @@ typedef struct ghl_ch_s {
   int ts_ack;
   gtime_t rto;
   gtime_t srtt;
+  gtime_t last_xmit;
+  unsigned int flightsize;
+  unsigned int cwnd;
+  unsigned int ssthresh; 
   ghl_serv_t *serv; /**< Server handle */
   ghl_member_t *member; /**< The peer */
   int finseq; 
@@ -385,7 +391,7 @@ typedef struct {
 
 
 
-ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_port);
+ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu);
 void ghl_free_serv(ghl_serv_t *serv);
 
 ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned int room_id);
@@ -417,7 +423,7 @@ ghl_ch_t *ghl_conn_connect(ghl_serv_t *serv, ghl_member_t *member, int port);
 void ghl_conn_close(ghl_serv_t *serv, ghl_ch_t *ch);
 int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int length);
 ghl_ch_t *ghl_conn_from_id(ghl_room_t *rh, unsigned int conn_id);
-unsigned int ghl_max_conn_pkt(unsigned int mtu);
+inline unsigned int ghl_max_conn_pkt(ghl_serv_t *serv);
 int ghl_num_members(ghl_serv_t *serv, unsigned int room_id);
 
 #endif

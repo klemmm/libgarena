@@ -64,6 +64,7 @@ static int handle_room_join_timeout(void *privdata);
 static void send_hello_to_members(ghl_room_t *rh);
 static int handle_room_join(int type, void *payload, unsigned int length, void *privdata, void *roomdata);
 static int handle_room_activity(int type, void *payload, unsigned int length, void *privdata, void *roomdata);
+static void update_rto(gtime_t rtt, ghl_ch_t *ch);
 
 
 /* API (public) functions defitinions */
@@ -125,11 +126,13 @@ int ghl_init(void) {
  * @param password Account password
  * @param server_ip Server IP address
  * @param server_port Server GSP port (if 0, defaults to 7456)
- * @param gp2pp_port Server GP2PP port (if 0, defaults to 1513)
+ * @param gp2pp_lport Server GP2PP local port (if 0, defaults to 1513)
+ * @param gp2pp_rport Server GP2PP remote port (if 0, defaults to 1513)
+ * @param mtu Link MTU (if 0, defaults to 1500)
  * @returns Pointer to the new server handle, or NULL in case of error
  */
  
-ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_port) {
+ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu) {
   int i;
   unsigned int local_len = sizeof(struct sockaddr_in);
   MHASH mh;
@@ -145,7 +148,9 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
   serv->gcrp_htab = NULL;
   serv->gsp_htab = NULL;
   serv->peersock = -1;
-  serv->gp2pp_port = gp2pp_port ? gp2pp_port : GP2PP_PORT;
+  serv->gp2pp_lport = gp2pp_lport ? gp2pp_lport : GP2PP_PORT;
+  serv->gp2pp_rport = gp2pp_rport ? gp2pp_rport : GP2PP_PORT;
+  serv->mtu = mtu ? mtu : GP2PP_DEFAULT_MTU;
   serv->hello_timer = NULL;
   serv->roominfo_timer = NULL;
   serv->conn_retrans_timer = NULL;
@@ -174,7 +179,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
     goto err;
   }
   local.sin_family = AF_INET;
-  local.sin_port = htons(serv->gp2pp_port); 
+  local.sin_port = htons(serv->gp2pp_lport); 
   local.sin_addr.s_addr = INADDR_ANY;
   
   if (bind(serv->peersock, (struct sockaddr *) &local, sizeof(local)) == -1) {
@@ -183,7 +188,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
   }
 
   fsocket.sin_family = AF_INET;
-  fsocket.sin_port = htons(GP2PP_PORT);
+  fsocket.sin_port = htons(serv->gp2pp_rport);
   fsocket.sin_addr.s_addr = server_ip;
   if (connect(serv->peersock, (struct sockaddr *) &fsocket, sizeof(fsocket)) == -1) {
     garena_errno = GARENA_ERR_LIBC;
@@ -204,7 +209,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
   }
   
   local.sin_family = AF_INET;
-  local.sin_port = htons(serv->gp2pp_port); 
+  local.sin_port = htons(serv->gp2pp_lport); 
   local.sin_addr.s_addr = INADDR_ANY;
   
   if (bind(serv->peersock, (struct sockaddr *) &local, sizeof(local)) == -1) {
@@ -928,6 +933,9 @@ ghl_ch_t *ghl_conn_connect(ghl_serv_t *serv, ghl_member_t *member, int port) {
   ch->rcv_next = 0;
   ch->rto = GP2PP_INIT_RTO;
   ch->srtt = 0;
+  ch->flightsize = 0;
+  ch->ssthresh = GP2PP_INIT_SSTHRESH;
+  ch->cwnd = (ghl_max_conn_pkt(serv) << 1); 
   ch->rcv_next_deliver = 0;
   ch->ts_ack = garena_now();
   ch->conn_id = gp2pp_new_conn_id();
@@ -991,6 +999,14 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
     return -1;
   }
   
+  if ((ch->last_xmit + ch->rto) > now) {
+    fprintf(deb, "[CC] Restart after idle...\n");
+    fprintf(deb, "[CC] Mode: SLOW START\n");
+  }
+  
+  fprintf(deb, "[CC] Flight size: %u\n", ch->flightsize);
+  fflush(deb);
+  
   if ((ch->snd_next - ch->snd_una) >= GP2PP_MAX_SENDQ) {
     garena_errno = GARENA_ERR_AGAIN;
     return -1;
@@ -1021,6 +1037,7 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
     xmit_packet(serv, pkt);
     pkt->first_trans = garena_now();
     fprintf(deb, "[GHL] Initial packet transmit: seq=%x snd_una=%x\n", pkt->seq, ch->snd_una); 
+    ch->flightsize += pkt->length;
   }
   return 0;
 }
@@ -1030,12 +1047,12 @@ int ghl_conn_send(ghl_serv_t *serv, ghl_ch_t *ch, char *payload, unsigned int le
  * without needing fragmentation. Depending on the network configuration, trying to send larget
  * segments may lead to lag, packet loss, disconnects, etc.
  *
- * @param mtu The link MTU
+ * @param serv The server handle
  * @return Maximum segment size.
  */
-inline unsigned int ghl_max_conn_pkt(unsigned int mtu) {
+inline unsigned int ghl_max_conn_pkt(ghl_serv_t *serv) {
   /* FIXME: should query path-MTU */
-  return (mtu - sizeof(struct ip) - sizeof(struct udphdr) - sizeof(gp2pp_conn_hdr_t));
+  return (serv->mtu - sizeof(struct ip) - sizeof(struct udphdr) - sizeof(gp2pp_conn_hdr_t));
 }
 
 
@@ -1047,6 +1064,7 @@ static void xmit_packet(ghl_serv_t *serv, ghl_ch_pkt_t *pkt) {
   remote.sin_family = AF_INET;
   remote.sin_addr = pkt->ch->member->effective_ip;
   remote.sin_port = htons(pkt->ch->member->effective_port);
+  pkt->ch->last_xmit = garena_now();
   gp2pp_output_conn(serv->peersock, GP2PP_CONN_MSG_DATA, pkt->payload, pkt->length, serv->my_info.user_id, pkt->ch->conn_id, pkt->seq, pkt->ch->rcv_next, pkt->ts_rel, &remote);
 }
 
@@ -1560,6 +1578,10 @@ static int handle_initconn_msg(int type, void *payload, unsigned int length, voi
   conn_incoming_ev.ch->snd_next = 0;
   conn_incoming_ev.ch->rcv_next = 0;
   conn_incoming_ev.ch->srtt = 0;
+  conn_incoming_ev.ch->flightsize = 0;
+  conn_incoming_ev.ch->ssthresh = GP2PP_INIT_SSTHRESH;
+  conn_incoming_ev.ch->cwnd = (ghl_max_conn_pkt(serv)) << 1;
+  conn_incoming_ev.ch->last_xmit = 0;
   conn_incoming_ev.ch->rto = GP2PP_INIT_RTO;
   conn_incoming_ev.ch->rcv_next_deliver = 0;
   conn_incoming_ev.ch->ts_ack = garena_now();
@@ -1657,20 +1679,10 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
       todel = pkt;
       fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
       fflush(deb);
+      ch->flightsize -= pkt->length;
       if (pkt->retrans == 0) {
         rtt = now - pkt->first_trans;
-        if (rtt == 0)
-          rtt++;
-        if (ch->srtt == 0) {
-          ch->srtt = rtt;
-        } else {
-          ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
-        }
-        ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
-        if (ch->rto > GP2PP_UBOUND)
-          ch->rto = GP2PP_UBOUND;
-        if (ch->rto < GP2PP_LBOUND)
-          ch->rto = GP2PP_LBOUND;
+        update_rto(rtt, ch);
       }
     }
     if ((pkt->xmit_ts == 0) && ((pkt->seq - ch->snd_una) < GP2PP_MAX_IN_TRANSIT)) 
@@ -1679,6 +1691,7 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
       pkt->rto = ch->rto;
       pkt->xmit_ts = garena_now();
       xmit_packet(serv, pkt);
+      ch->flightsize += pkt->length;
   }
   if (todel != NULL) {
       llist_del_item(ch->sendq, todel);
@@ -1688,6 +1701,23 @@ static int handle_conn_ack_msg(int subtype, void *payload, unsigned int length, 
   }
   do_fast_retrans(serv, ch->sendq, seq1);
   return 0;
+}
+
+static void update_rto(gtime_t rtt, ghl_ch_t *ch) {
+  
+  if (rtt == 0)
+    rtt++;
+  
+  if (ch->srtt == 0) {
+    ch->srtt = rtt;
+  } else {
+    ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
+  }
+  ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
+  if (ch->rto > GP2PP_UBOUND)
+    ch->rto = GP2PP_UBOUND;
+  if (ch->rto < GP2PP_LBOUND)
+    ch->rto = GP2PP_LBOUND;
 }
 
 static int handle_conn_data_msg(int subtype, void *payload, unsigned int length, void *privdata, unsigned int user_id, unsigned int conn_id, int seq1, int seq2, int ts_rel, struct sockaddr_in *remote) {
@@ -1734,23 +1764,11 @@ static int handle_conn_data_msg(int subtype, void *payload, unsigned int length,
       todel = pkt;
       fprintf(deb, "Packet seq %x of conn %x was transmitted after %u msec\n", pkt->seq, ch->conn_id, (now - pkt->first_trans));
       fflush(deb);
+      ch->flightsize -= pkt->length;
       if (pkt->retrans == 0) {
         rtt = now - pkt->first_trans;
-        if (rtt == 0)
-          rtt++;
-        if (ch->srtt == 0) {
-          ch->srtt = rtt;
-        } else {
-          ch->srtt = ((ch->srtt * GP2PP_ALPHA) + rtt*(1024-GP2PP_ALPHA)) >> 10;
-        }
-        ch->rto = (GP2PP_BETA*ch->srtt) >> 10; 
-        if (ch->rto > GP2PP_UBOUND)
-          ch->rto = GP2PP_UBOUND;
-        if (ch->rto < GP2PP_LBOUND)
-          ch->rto = GP2PP_LBOUND;
+        update_rto(rtt, ch);
       }
-
-
     }
   }
   if (todel != NULL) {

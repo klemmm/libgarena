@@ -9,6 +9,8 @@
 #include <garena/garena.h>
 
 
+#define GP2PP_DEFAULT_MTU 1500
+#define GP2PP_INIT_SSTHRESH 65536
 #define GP2PP_ALPHA 820
 #define GP2PP_BETA 1536
 #define GP2PP_LBOUND 50
