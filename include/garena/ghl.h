@@ -91,10 +91,16 @@
  * The associated event data type is @ref ghl_servconn_t
  */
 #define GHL_EV_SERVCONN 11
+
+/**
+ * Event receinved when there is a system message in the room.
+ * The associated event data type is @ref ghl_system_t
+ */
+#define GHL_EV_SYSTEM 12
 /**
  * The number of events.
  */
-#define GHL_EV_NUM 12
+#define GHL_EV_NUM 13
 
 /**
  * The number of seconds to wait for main server connection
@@ -221,11 +227,8 @@ typedef struct ghl_rh_s {
   struct ghl_member_s *me; /**< Pointer to the room member that is our client */
   ghl_serv_t *serv; /**< Pointer to server handle */
   ihash_t members; /**< Hashtable (key=user id, value= pointer to @ref ghl_member_t) to get room members */
-  int got_welcome; /**< Did we receive welcome message yet? */
-  int got_members; /**< Did we receive room member list yet? */
   ghl_timer_t *timeout; /**< Timer to handle room join timeout */
   int joined; /**< Did we fully join the room yet? */
-  char welcome[GCRP_MAX_MSGSIZE]; /**< Welcome message of the room. */
   ihash_t conns; /**< Hashtable(key=conn id, value pointer to @ref ghl_ch_t) to get virtual connections on the VPN associated with this room */
 } ghl_room_t;
 
@@ -284,6 +287,15 @@ typedef struct {
   ghl_room_t *rh; /**< Room handle */
   char *text; /**< The text */
 } ghl_talk_t;
+
+/**
+ * @ref GHL_EV_SYSTEM event data structure.
+ */
+
+typedef struct {
+  ghl_room_t *rh; /**< Room handle */
+  char *text; /**< The text */
+} ghl_system_t;
 
 /**
  * @ref GHL_EV_TOGGLEVPN event data structure.

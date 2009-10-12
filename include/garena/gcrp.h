@@ -19,7 +19,7 @@
 #define GCRP_MSG_PART 0x23
 #define GCRP_MSG_TALK 0x25
 #define GCRP_MSG_MEMBERS 0x2c
-#define GCRP_MSG_WELCOME 0x30
+#define GCRP_MSG_SYSTEM 0x30
 #define GCRP_MSG_JOIN_FAILED 0x36
 #define GCRP_MSG_STARTVPN 0x3a
 #define GCRP_MSG_STOPVPN 0x39
@@ -50,11 +50,11 @@ struct gcrp_me_join_suffix_s {
 } __attribute__ ((packed));
 typedef struct gcrp_me_join_suffix_s gcrp_me_join_suffix_t;
 
-struct gcrp_welcome_s {
+struct gcrp_system_s {
   uint32_t room_id;
   char text[0];
 } __attribute__ ((packed));
-typedef struct gcrp_welcome_s gcrp_welcome_t;
+typedef struct gcrp_system_s gcrp_system_t;
 
 struct gcrp_member_s {
   uint32_t user_id;

@@ -264,7 +264,7 @@ ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_p
     goto err;
   
   /* GCRP handlers */
-  if (gcrp_register_handler(serv->gcrp_htab, GCRP_MSG_WELCOME, handle_room_join, serv) == -1)
+  if (gcrp_register_handler(serv->gcrp_htab, GCRP_MSG_SYSTEM, handle_room_activity, serv) == -1)
     goto err;
   if (gcrp_register_handler(serv->gcrp_htab, GCRP_MSG_MEMBERS, handle_room_join, serv) == -1)
     goto err;
@@ -427,8 +427,6 @@ ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned
     free(rh);
     return NULL;
   }
-  rh->got_welcome = 0;
-  rh->got_members = 0;
   serv->room = rh;
   fflush(deb);
   rh->timeout = ghl_new_timer(garena_now() + GHL_JOIN_TIMEOUT, handle_room_join_timeout, rh);
@@ -1871,7 +1869,6 @@ static int handle_room_join_timeout(void *privdata) {
 
 
 static int handle_room_join(int type, void *payload, unsigned int length, void *privdata, void *roomdata) {
-  gcrp_welcome_t *welcome = payload;
   gcrp_memberlist_t *memberlist = payload;
   ghl_me_join_t join;
   ghl_room_t *rh = NULL;
@@ -1879,18 +1876,9 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
   int err = 0;
   ghl_member_t *member;
   unsigned int i;
+  int joined;
   
   switch(type) {
-    case GCRP_MSG_WELCOME:
-      rh = serv->room;
-      if ((rh == NULL) || (rh->room_id != ghtonl(welcome->room_id))) {
-        fprintf(stderr, "[GHL/WARN] Joined a room that we didn't ask to join (?!?) id=%x\n", ghtonl(welcome->room_id));
-        return 0;
-      }
-      if (gcrp_tochar(rh->welcome, welcome->text, GCRP_MAX_MSGSIZE-1) == -1)
-        fprintf(stderr, "[GHL/WARN] Welcome message decode failed\n");
-      rh->got_welcome = 1;
-      break;
     case GCRP_MSG_MEMBERS:
       IFDEBUG(printf("[GHL] Received members (%u members).\n", ghtonl(memberlist->num_members)));
       rh = serv->room;
@@ -1924,7 +1912,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
          return err ? -1 : 0;
       }
       serv->my_info.user_id = rh->me->user_id;
-      rh->got_members = 1;
+      joined = 1;
       break;  
     case GCRP_MSG_JOIN_FAILED:
 
@@ -1947,7 +1935,7 @@ static int handle_room_join(int type, void *payload, unsigned int length, void *
       return -1;
   }
   
-  if (rh && rh->got_welcome && rh->got_members) {
+  if (rh && joined) {
     join.result = GHL_EV_RES_SUCCESS;
     join.rh = rh;
     ghl_free_timer(rh->timeout);
@@ -1966,11 +1954,13 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
   gcrp_join_t *join = payload;
   gcrp_part_t *part = payload;
   gcrp_talk_t *talk = payload;
+  gcrp_system_t *syst = payload;
   gcrp_togglevpn_t *togglevpn = payload;
   ghl_room_t *rh = roomdata;
   ghl_serv_t *serv = privdata;
   ghl_member_t *member;
   ghl_talk_t talk_ev;
+  ghl_system_t system_ev;
   ghl_part_t part_ev;
   ihashitem_t iter;
   ghl_conn_fin_t conn_fin_ev;
@@ -1993,7 +1983,7 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
 
       break;
     case GCRP_MSG_TALK:
-      if (gcrp_tochar(buf, talk->text, (talk->length >> 1) + 1) == -1) {
+      if ((((talk->length >> 1) + 1) > (GCRP_MAX_MSGSIZE)) || (gcrp_tochar(buf, talk->text, (talk->length >> 1) + 1) == -1)) {
         fprintf(stderr, "Failed to convert user message.\n");
       } else {
         member = ghl_member_from_id(rh, ghtonl(talk->user_id));
@@ -2007,6 +1997,15 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
         talk_ev.member = member;
         talk_ev.text = buf;
         signal_event(serv, GHL_EV_TALK, &talk_ev);
+      }
+      break;
+    case GCRP_MSG_SYSTEM:
+      if (gcrp_tochar(buf, syst->text, GCRP_MAX_MSGSIZE) == -1) {
+        fprintf(stderr, "Failed to convert user message.\n");
+      } else {
+        system_ev.rh = rh;
+        system_ev.text = buf;
+        signal_event(serv, GHL_EV_SYSTEM, &system_ev);
       }
       break;
     case GCRP_MSG_STARTVPN:
