@@ -132,7 +132,7 @@ int ghl_init(void) {
  * @returns Pointer to the new server handle, or NULL in case of error
  */
  
-ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu) {
+ghl_serv_t *ghl_new_serv(const char *name, const char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu) {
   int i;
   unsigned int local_len = sizeof(struct sockaddr_in);
   MHASH mh;
@@ -561,7 +561,7 @@ int ghl_udp_encap(ghl_serv_t *serv, ghl_member_t *member, int sport, int dport, 
  *
  * @param serv The server handle
  * @param fds The fd_set in which we want to store the file descriptor list
- * @return 0 for success, -1 for failure
+ * @return Max fd for success, -1 for failure
  */
 int ghl_fill_fds(ghl_serv_t *serv, fd_set *fds) {
   int max = -1;
@@ -671,6 +671,11 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
       }
       r = select(r+1, &myfds, NULL, NULL, NULL);
     }
+    if (r == -1) {
+      garena_errno = GARENA_ERR_LIBC;
+      return -1;
+    }
+    
     if (r == 0) {
       IFDEBUG(printf("[GHL/DEBUG] Wake-up due to timer\n"));
     } else {
@@ -1167,6 +1172,7 @@ static int ghl_free_room(ghl_room_t *rh) {
 static void send_hello(ghl_serv_t *serv, ghl_member_t *cur) {
   struct sockaddr_in remote;
   remote.sin_family = AF_INET;
+  cur->echo_ts = garena_now();
     if (cur->conn_ok > 0) {
       remote.sin_addr = cur->effective_ip;
       remote.sin_port = htons(cur->effective_port);
@@ -1831,17 +1837,22 @@ static int handle_peer_msg(int type, void *payload, unsigned int length, void *p
   switch(type) {
     case GP2PP_MSG_HELLO_REQ:
       IFDEBUG(printf("[GHL/DEBUG] Received HELLO request from %s\n", member->name));
-      if (member->conn_ok == 0)
-        member->conn_ok = 1;
-      member->effective_ip = remote->sin_addr;
-      member->effective_port = htons(remote->sin_port);
-      gp2pp_send_hello_reply(serv->peersock, serv->my_info.user_id, user_id, remote);
+      if (user_id != serv->my_info.user_id) {
+        if (member->conn_ok == 0)
+          member->conn_ok = 1;
+        member->effective_ip = remote->sin_addr;
+        member->effective_port = htons(remote->sin_port);
+        gp2pp_send_hello_reply(serv->peersock, serv->my_info.user_id, user_id, remote);
+      }
       break;
     case GP2PP_MSG_HELLO_REP:
-      IFDEBUG(printf("[GHL/DEBUG] Received HELLO reply from %s\n", member->name));
-      member->effective_ip = remote->sin_addr;
-      member->effective_port = htons(remote->sin_port);
-      member->conn_ok = 2;
+      if (user_id != serv->my_info.user_id) {
+        IFDEBUG(printf("[GHL/DEBUG] Received HELLO reply from %s\n", member->name));
+        member->effective_ip = remote->sin_addr;
+        member->effective_port = htons(remote->sin_port);
+        member->conn_ok = 2;
+        member->ping = (garena_now() - member->echo_ts) * 10;
+      }
       break;
     case GP2PP_MSG_UDP_ENCAP:
       udp_encap_ev.member = member;
@@ -1977,16 +1988,15 @@ static int handle_room_activity(int type, void *payload, unsigned int length, vo
   
   switch(type) {
     case GCRP_MSG_JOIN:
-      member = malloc(sizeof(ghl_member_t));
-      member_extract(member, join);
-      ihash_put(rh->members, member->user_id, member);
-      join_ev.rh = rh;
-      join_ev.member = member;
-      signal_event(serv, GHL_EV_JOIN, &join_ev);
-      if (member->user_id != serv->my_info.user_id) {
+      if (ghtonl(join->user_id) != serv->my_info.user_id) {
+        member = malloc(sizeof(ghl_member_t));
+        member_extract(member, join);
+        ihash_put(rh->members, member->user_id, member);
+        join_ev.rh = rh;
+        join_ev.member = member;
+        signal_event(serv, GHL_EV_JOIN, &join_ev);
         send_hello(serv, member);
       }
-
       break;
     case GCRP_MSG_TALK:
       if ((((talk->length >> 1) + 1) > (GCRP_MAX_MSGSIZE)) || (gcrp_tochar(buf, talk->text, (talk->length >> 1) + 1) == -1)) {

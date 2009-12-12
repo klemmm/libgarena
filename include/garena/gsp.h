@@ -118,7 +118,7 @@ int gsp_input(gsp_handtab_t *,char *buf, unsigned int length, unsigned char *key
 int gsp_register_handler(gsp_handtab_t *,int msgtype, gsp_fun_t *fun, void *privdata);
 int gsp_unregister_handler(gsp_handtab_t *, int msgtype);
 void* gsp_handler_privdata(gsp_handtab_t *, int msgtype);
-int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv, unsigned int internal_ip, int internal_port);
+int gsp_send_login(int sock, const char *login, char *md5pass, unsigned char *key, unsigned char *iv, unsigned int internal_ip, int internal_port);
 gsp_handtab_t *gsp_alloc_handtab (void);
 int gsp_send_hello(int sock, unsigned char *key, unsigned char *iv);
 

@@ -26,6 +26,7 @@
 
 /**
  * Event received when a join room operation (initiated by you) is completed (or has failed). 
+ * If it has failed, the room handle will be free()'d after your handler returns.
  */
 #define GHL_EV_ME_JOIN 0
 /**
@@ -87,7 +88,9 @@
 #define GHL_EV_ROOM_DISC 10
 
 /**
- * Event received when the connection to the main server is completed (or has failed)
+ * Event received when the connection to the main server is completed (or has failed).
+ * If the connection has failed, the server handle will be free()'d after your handler
+ * returns.
  * The associated event data type is @ref ghl_servconn_t
  */
 #define GHL_EV_SERVCONN 11
@@ -251,6 +254,8 @@ typedef struct ghl_member_s {
   uint16_t effective_port; /**< Effective port of the member */
   uint8_t virtual_suffix; /**< Virtual suffix (i.e. the virtual IP of the member is 192.168.29.virtual_suffix)  */
   int conn_ok; /**< Do we have direct bidirectionnal communication with the member? (else VPN communication with the member won't work) */
+  gtime_t echo_ts; /**< Timestamp at when we last sent a HELLO REQ message to this member */
+  int ping; /**< Member ping, in msec */
 } ghl_member_t;
 
 /**
@@ -403,7 +408,7 @@ typedef struct {
 
 
 
-ghl_serv_t *ghl_new_serv(char *name, char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu);
+ghl_serv_t *ghl_new_serv(const char *name, const char *password, int server_ip, int server_port, int gp2pp_lport, int gp2pp_rport, int mtu);
 void ghl_free_serv(ghl_serv_t *serv);
 
 ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned int room_id);

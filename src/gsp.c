@@ -268,7 +268,7 @@ void* gsp_handler_privdata(gsp_handtab_t *htab, int msgtype) {
 }
 
 
-int gsp_send_login(int sock, char *login, char *md5pass, unsigned char *key, unsigned char *iv, unsigned int internal_ip, int internal_port) {
+int gsp_send_login(int sock, const char *login, char *md5pass, unsigned char *key, unsigned char *iv, unsigned int internal_ip, int internal_port) {
   gsp_login_t msg;
   static char *hex_digit = "0123456789abcdef";
   int i,j;
