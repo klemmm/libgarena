@@ -658,11 +658,17 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
   if (fds == NULL) {
     fds = &myfds;
     FD_ZERO(&myfds);
+    r = ghl_fill_fds(serv, &myfds);
     if (ghl_fill_tv(serv, &tv)) {
       IFDEBUG(printf("[GHL/DEBUG] Going to sleep, wake-up on network activity or at next timer (%u secs)\n", tv.tv_sec));
       r = select(r+1, &myfds, NULL, NULL, &tv);
     } else { 
       IFDEBUG(printf("[GHL/DEBUG] Going to sleep, wake-up on network activity\n"));
+      if (r == -1) {
+        IFDEBUG(printf("[GHL/DEBUG] Would wait indefinitely\n"));
+        garena_errno = GARENA_ERR_INVALID;
+        return -1;
+      }
       r = select(r+1, &myfds, NULL, NULL, NULL);
     }
     if (r == 0) {
