@@ -170,12 +170,12 @@ int gp2pp_output(int sock, int type, char *payload, unsigned int length, int use
     return 0;
   }
 */
-
   if (length + hdrsize > GP2PP_MAX_MSGSIZE) {
     garena_errno = GARENA_ERR_INVALID;
     return -1;
   }
   
+  memset(hdr->unknown, 0, sizeof(hdr->unknown));
   hdr->msgtype = type;
   hdr->user_id = ghtonl(user_id);
   
