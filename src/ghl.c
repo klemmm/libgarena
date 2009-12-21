@@ -24,6 +24,7 @@
 #include <garena/util.h> 
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <fcntl.h>
 #include <mhash.h>
 #include <errno.h>
 
@@ -65,7 +66,8 @@ static void send_hello_to_members(ghl_room_t *rh);
 static int handle_room_join(int type, void *payload, unsigned int length, void *privdata, void *roomdata);
 static int handle_room_activity(int type, void *payload, unsigned int length, void *privdata, void *roomdata);
 static void update_rto(gtime_t rtt, ghl_ch_t *ch);
-
+static int set_nonblock(int sock);
+              
 
 /* API (public) functions defitinions */
 
@@ -216,6 +218,7 @@ ghl_serv_t *ghl_new_serv(const char *name, const char *password, int server_ip, 
     garena_errno = GARENA_ERR_LIBC;
     goto err;
   }
+  set_nonblock(serv->peersock);
 
   fsocket.sin_family = AF_INET;
   fsocket.sin_port = server_port ? htons(server_port) : htons(GSP_PORT);
@@ -224,6 +227,7 @@ ghl_serv_t *ghl_new_serv(const char *name, const char *password, int server_ip, 
     garena_errno = GARENA_ERR_LIBC;
     goto err;
   }
+  set_nonblock(serv->servsock);
   if (gsp_open_session(serv->servsock, serv->session_key, serv->session_iv) == -1)
     goto err;
   if (gsp_send_hello(serv->servsock, serv->session_key, serv->session_iv) == -1)
@@ -399,7 +403,7 @@ ghl_room_t *ghl_join_room(ghl_serv_t *serv, int room_ip, int room_port, unsigned
     free(rh);
     return NULL;
   }
-  
+  set_nonblock(rh->roomsock);
   myinfo_pack(&join_block, &serv->my_info);
   if (gcrp_send_join(rh->roomsock, room_id, &join_block, serv->md5pass) == -1) {
     close(rh->roomsock);
@@ -688,7 +692,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
     r = gcrp_read(serv->room->roomsock, buf, GCRP_MAX_MSGSIZE);
     if (r != -1) {
       gcrp_input(serv->gcrp_htab, buf, r, serv->room);
-    } else if ((errno != EINTR) && (errno != EAGAIN)) {
+    } else if ((garena_errno != GARENA_ERR_LIBC) || ((errno != EWOULDBLOCK) && (errno != EINTR))) {
       if (serv->room->joined) {
         room_disc_ev.rh = serv->room;
         signal_event(serv, GHL_EV_ROOM_DISC, &room_disc_ev);
@@ -716,7 +720,7 @@ int ghl_process(ghl_serv_t *serv, fd_set *fds) {
     r = gsp_read(serv->servsock, buf, GSP_MAX_MSGSIZE);
     if (r != -1) {
       gsp_input(serv->gsp_htab, buf, r, serv->session_key, serv->session_iv);
-    } else {
+    } else if ((garena_errno != GARENA_ERR_LIBC) || ((errno != EWOULDBLOCK) && (errno != EINTR))) {
       fprintf(deb, "[WARN/GHL] Disconnected from main server, but we don't care\n");
       fflush(deb);
       close(serv->servsock);
@@ -1237,6 +1241,16 @@ static void update_next(ghl_serv_t *serv, ghl_ch_t *ch) {
     }
   }
 }
+
+static int set_nonblock(int sock) {
+  int flags;
+  
+  flags = fcntl(sock, F_GETFL, 0);
+  if (flags == -1) 
+    return -1;
+  return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+}
+
 
 static void try_deliver(ghl_serv_t *serv, ghl_ch_t *ch) {
   cell_t iter;
