@@ -1243,12 +1243,14 @@ static void update_next(ghl_serv_t *serv, ghl_ch_t *ch) {
 }
 
 static int set_nonblock(int sock) {
+/*
   int flags;
   
   flags = fcntl(sock, F_GETFL, 0);
   if (flags == -1) 
     return -1;
-  return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+  return fcntl(sock, F_SETFL, flags | O_NONBLOCK);*/
+  return 0;
 }
 
 
